@@ -13,7 +13,7 @@ from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricsHistory
-from .interaction import MODE_KILL_CONFIRM, MODE_SORT_MENU, ProcessViewState
+from .interaction import MODE_KILL_CONFIRM, MODE_SORT_MENU, SORT_DEFAULT, ProcessViewState
 from .models import GpuInfo, ProcessInfo, Snapshot
 
 DRACULA_GREEN = "#50fa7b"
@@ -332,15 +332,20 @@ def render_process_table(
         caption=caption,
         caption_justify="left",
     )
-    table.add_column("GPU", justify="right", style="bold")
-    table.add_column("PID", justify="right")
-    table.add_column("USER")
-    table.add_column("GPU-MEM", justify="right")
-    table.add_column("%GPU-MEM", justify="right")
-    table.add_column("%CPU", justify="right")
-    table.add_column("%MEM", justify="right")
-    table.add_column("TIME", justify="right")
-    table.add_column("COMMAND", overflow="fold", ratio=1, min_width=12)
+    table.add_column(process_column_header("GPU", "gpu", process_state), justify="right", style="bold")
+    table.add_column(process_column_header("PID", "pid", process_state), justify="right")
+    table.add_column(process_column_header("USER", "user", process_state))
+    table.add_column(process_column_header("GPU-MEM", "gpu_memory", process_state), justify="right")
+    table.add_column(process_column_header("%GPU-MEM", "gpu_memory_percent", process_state), justify="right")
+    table.add_column(process_column_header("%CPU", "cpu", process_state), justify="right")
+    table.add_column(process_column_header("%MEM", "mem", process_state), justify="right")
+    table.add_column(process_column_header("TIME", "time", process_state), justify="right")
+    table.add_column(
+        process_column_header("COMMAND", "command", process_state),
+        overflow="fold",
+        ratio=1,
+        min_width=12,
+    )
 
     if not display_processes:
         table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
@@ -366,6 +371,18 @@ def render_process_table(
             style=f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}" if selected_pid == proc.pid else None,
         )
     return table
+
+
+def process_column_header(label: str, sort_field: str, process_state: ProcessViewState | None) -> Text:
+    text = Text(label, style=f"bold {DRACULA_FG}")
+    if (
+        process_state is not None
+        and process_state.sort_field != SORT_DEFAULT
+        and process_state.sort_field == sort_field
+    ):
+        arrow = "↓" if process_state.sort_desc else "↑"
+        text.append(f" {arrow}", style=f"bold {DRACULA_ORANGE}")
+    return text
 
 
 def visible_process_window(

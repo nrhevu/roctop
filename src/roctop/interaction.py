@@ -207,7 +207,7 @@ class ProcessViewState:
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q"):
             self.mode = MODE_NORMAL
-            self.status_message = "Sort cancelled"
+            self.status_message = ""
             return KeyResult(changed=True)
         if key == KEY_ENTER:
             field = SORT_OPTIONS[self.sort_menu_index]
@@ -217,7 +217,7 @@ class ProcessViewState:
                 self.sort_field = field
                 self.sort_desc = field in DEFAULT_DESCENDING_SORTS
             self.mode = MODE_NORMAL
-            self.status_message = f"Sorted by {SORT_LABELS[field]} {self.sort_direction_label()}"
+            self.status_message = ""
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -252,8 +252,8 @@ class ProcessViewState:
 
     def process_title(self, process_count: int) -> str:
         if process_count <= 0:
-            return f"Processes  0/0  sort: {self.sort_label()}"
-        return f"Processes  {self.selected_index + 1}/{process_count}  sort: {self.sort_label()}"
+            return "Processes  0/0"
+        return f"Processes  {self.selected_index + 1}/{process_count}"
 
     def caption(self) -> str:
         if self.mode == MODE_SORT_MENU:

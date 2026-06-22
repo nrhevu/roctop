@@ -243,7 +243,8 @@ class RenderTests(unittest.TestCase):
         )
         plain = console.export_text(clear=False)
         styled = console.export_text(styles=True)
-        self.assertIn("Processes  1/1  sort: default", plain)
+        self.assertIn("Processes  1/1", plain)
+        self.assertNotIn("sort: default", plain)
         self.assertNotIn("j/k move", plain)
         self.assertIn("48;2;68;71;90", styled)
 
@@ -262,7 +263,8 @@ class RenderTests(unittest.TestCase):
         styled = console.export_text(styles=True)
         self.assertNotIn("Processes:", plain)
         self.assertNotIn("Sort:", plain)
-        self.assertIn("Processes  2/2  sort: default", plain)
+        self.assertIn("Processes  2/2", plain)
+        self.assertNotIn("sort: default", plain)
         self.assertIn("j/k: move", plain)
         self.assertIn("PgUp/PgDn: scroll", plain)
         self.assertIn("s: sort", plain)
@@ -270,6 +272,24 @@ class RenderTests(unittest.TestCase):
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("Mon Jun 22"), plain.index("j/k: move"))
         self.assertIn("38;2;255;184;108", styled)
+
+    def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="root", cpu_percent=65.2, args="python train.py"),
+            ProcessInfo(gpu_index=1, pid=456, user="root", cpu_percent=12.3, args="python serve.py"),
+        ]
+        state = ProcessViewState(selected_pid=123, sort_field="cpu", sort_desc=True, viewport_rows=4)
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        output = console.export_text()
+        self.assertIn("%CPU ↓", output)
+        self.assertNotIn("sort:", output)
+        self.assertNotIn("Sorted by", output)
+
+        state.sort_desc = False
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        self.assertIn("%CPU ↑", console.export_text())
 
     def test_process_view_state_limits_visible_rows(self) -> None:
         processes = [
