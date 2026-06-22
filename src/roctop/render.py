@@ -52,8 +52,8 @@ def render_header(snapshot: Snapshot) -> Panel:
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
-    table.add_column("DIDs", overflow="fold")
-    table.add_column("GUIDs", overflow="fold")
+    table.add_column("DID", overflow="fold")
+    table.add_column("GUID", overflow="fold")
     table.add_column("Temp", justify="right")
     table.add_column("Fan", justify="right")
     table.add_column("Power", justify="right")
