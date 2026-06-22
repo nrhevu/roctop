@@ -212,7 +212,6 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
                 name=name,
                 command=name,
                 gpu_memory_bytes=gpu_memory,
-                cu_occupancy=parse_int(parts[4], default=0) if len(parts) > 4 else None,
             )
         )
     return processes
@@ -248,7 +247,6 @@ def parse_amd_smi_process_json(data: list[dict[str, Any]], gpus: list[GpuInfo]) 
                     command=name,
                     gpu_memory_bytes=gpu_memory,
                     gpu_memory_percent=memory_percent,
-                    cu_occupancy=parse_int(info.get("cu_occupancy"), default=0),
                 )
             )
     return processes
@@ -274,8 +272,6 @@ def merge_process_sources(primary: list[ProcessInfo], fallback: list[ProcessInfo
             proc.command = fallback_proc.command
         if proc.gpu_memory_bytes <= 0:
             proc.gpu_memory_bytes = fallback_proc.gpu_memory_bytes
-        if proc.cu_occupancy is None and fallback_proc.cu_occupancy is not None:
-            proc.cu_occupancy = fallback_proc.cu_occupancy
     return primary
 
 

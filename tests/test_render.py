@@ -39,7 +39,6 @@ class RenderTests(unittest.TestCase):
                     user="root",
                     cpu_percent=12.3,
                     host_mem_percent=0.4,
-                    cu_occupancy=83,
                     elapsed="01:02",
                     command="python",
                     args="python train.py --long-argument",
@@ -75,8 +74,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("42%", output)
         self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
-        self.assertIn("%GPU", output)
-        self.assertIn("83", output)
+        self.assertIn("%GPU-MEM", output)
 
     def test_fan_column_visible_when_unsupported(self) -> None:
         snapshot = Snapshot(
@@ -117,9 +115,8 @@ class RenderTests(unittest.TestCase):
                         user="root",
                         gpu_memory_bytes=512 * 1024 * 1024,
                         gpu_memory_percent=12.5,
-                        cu_occupancy=88,
                         cpu_percent=65.2,
-                        host_mem_percent=7.4,
+                        host_mem_percent=88.4,
                         elapsed="01:02",
                         args="python train.py",
                     )
@@ -127,7 +124,8 @@ class RenderTests(unittest.TestCase):
             )
         )
         output = console.export_text(styles=True)
-        self.assertIn("%GPU", output)
+        self.assertIn("%CPU", output)
+        self.assertIn("%MEM", output)
         self.assertIn("38;2;255;85;85", output)
         self.assertIn("38;2;241;250;140", output)
         self.assertIn("38;2;80;250;123", output)

@@ -123,14 +123,13 @@ def render_process_table(processes: list[ProcessInfo]) -> Table:
     table.add_column("USER")
     table.add_column("GPU-MEM", justify="right")
     table.add_column("%GPU-MEM", justify="right")
-    table.add_column("%GPU", justify="right")
     table.add_column("%CPU", justify="right")
     table.add_column("%MEM", justify="right")
     table.add_column("TIME", justify="right")
     table.add_column("COMMAND", overflow="ellipsis", ratio=2)
 
     if not processes:
-        table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
+        table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
         return table
 
     for proc in processes:
@@ -143,7 +142,6 @@ def render_process_table(processes: list[ProcessInfo]) -> Table:
             proc.user or "-",
             Text(format_bytes_mib(proc.gpu_memory_bytes), style=gpu_mem_style),
             Text(percent_text(proc.gpu_memory_percent, digits=1), style=gpu_mem_style),
-            metric_text(proc.cu_occupancy, digits=0),
             metric_text(proc.cpu_percent, digits=1),
             metric_text(proc.host_mem_percent, digits=1),
             proc.elapsed or "-",

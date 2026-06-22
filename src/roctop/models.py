@@ -42,7 +42,6 @@ class ProcessInfo:
     args: str = ""
     gpu_memory_bytes: int = 0
     gpu_memory_percent: float = 0.0
-    cu_occupancy: int | None = None
 
 
 @dataclass(slots=True)

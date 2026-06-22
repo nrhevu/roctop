@@ -64,7 +64,6 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].memory_used_bytes, 200804560896)
         self.assertEqual(len(processes), 1)
         self.assertEqual(processes[0].pid, 710898)
-        self.assertEqual(processes[0].cu_occupancy, 88)
 
     def test_parse_amd_smi_process_json_filters_zero_memory(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(
@@ -87,7 +86,6 @@ class CollectorTests(unittest.TestCase):
                             "pid": 710898,
                             "name": "N/A",
                             "mem_usage": {"value": 200145596416, "unit": "B"},
-                            "cu_occupancy": 73,
                         }
                     },
                 ],
@@ -97,7 +95,6 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(processes), 1)
         self.assertEqual(processes[0].gpu_index, 4)
         self.assertEqual(processes[0].pid, 710898)
-        self.assertEqual(processes[0].cu_occupancy, 73)
         self.assertGreater(processes[0].gpu_memory_percent, 60)
 
     def test_merge_process_sources_fills_name(self) -> None:
