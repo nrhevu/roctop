@@ -22,6 +22,8 @@ class CollectorTests(unittest.TestCase):
             "card0": {
                 "Temperature (Sensor junction) (C)": "60.0",
                 "Current Socket Graphics Package Power (W)": "266.0",
+                "sclk clock speed:": "(173Mhz)",
+                "mclk clock speed:": "(2000Mhz)",
                 "GPU use (%)": "99",
                 "VRAM Total Memory (B)": "308902100992",
                 "VRAM Total Used Memory (B)": "200804560896",
@@ -40,6 +42,8 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].index, 0)
         self.assertEqual(gpus[0].utilization_percent, 99)
         self.assertEqual(gpus[0].power_w, 266.0)
+        self.assertEqual(gpus[0].sclk_mhz, 173)
+        self.assertEqual(gpus[0].mclk_mhz, 2000)
         self.assertEqual(gpus[0].memory_used_bytes, 200804560896)
         self.assertEqual(len(processes), 1)
         self.assertEqual(processes[0].pid, 710898)

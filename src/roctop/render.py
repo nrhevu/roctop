@@ -40,6 +40,8 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table.add_column("Name", overflow="fold")
     table.add_column("Temp", justify="right")
     table.add_column("Power", justify="right")
+    table.add_column("SCLK", justify="right")
+    table.add_column("MCLK", justify="right")
     table.add_column("Memory-Usage", justify="right")
     table.add_column("GPU-Util", justify="right")
     table.add_column("MEM", ratio=2)
@@ -50,6 +52,8 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         util_style = percent_style(gpu.utilization_percent)
         temp = f"{gpu.temperature_c:.0f}°C" if gpu.temperature_c is not None else "N/A"
         power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
+        sclk = format_clock(gpu.sclk_mhz)
+        mclk = format_clock(gpu.mclk_mhz)
         name = gpu.name
         if gpu.gfx_version and gpu.gfx_version not in name:
             name = f"{name} {gpu.gfx_version}"
@@ -58,6 +62,8 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
             name,
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(power, style=power_style(gpu.power_w)),
+            Text(sclk, style=clock_style(gpu.sclk_mhz)),
+            Text(mclk, style=clock_style(gpu.mclk_mhz)),
             Text(
                 f"{format_bytes_mib(gpu.memory_used_bytes)} / {format_bytes_mib(gpu.memory_total_bytes)}",
                 style=mem_style,
@@ -158,3 +164,15 @@ def power_style(power_w: float | None) -> str:
     if power_w >= 250:
         return "yellow"
     return "green"
+
+
+def format_clock(clock_mhz: int | None) -> str:
+    if clock_mhz is None:
+        return "N/A"
+    return f"{clock_mhz}MHz"
+
+
+def clock_style(clock_mhz: int | None) -> str:
+    if clock_mhz is None:
+        return "dim"
+    return "cyan"

@@ -20,6 +20,7 @@ ROCM_SMI_ARGS = [
     "--showmeminfo",
     "vram",
     "--showtemp",
+    "--showclocks",
     "--showpower",
     "--showpids",
     "--showdriverversion",
@@ -150,6 +151,18 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
                         value.get("Average Graphics Package Power (W)"),
                         value.get("average_socket_power (W)"),
                         value.get("current_socket_power (W)"),
+                    )
+                ),
+                sclk_mhz=parse_clock_mhz(
+                    first_non_empty(
+                        value.get("sclk clock speed:"),
+                        value.get("current_gfxclk (MHz)"),
+                    )
+                ),
+                mclk_mhz=parse_clock_mhz(
+                    first_non_empty(
+                        value.get("mclk clock speed:"),
+                        value.get("current_uclk (MHz)"),
                     )
                 ),
                 memory_used_bytes=parse_int(value.get("VRAM Total Used Memory (B)")),
@@ -341,6 +354,18 @@ def parse_optional_float(value: Any) -> float | None:
     if not text or text.upper() == "N/A":
         return None
     return parse_number(text)
+
+
+def parse_clock_mhz(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A":
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    return int(round(float(match.group(0))))
 
 
 def _warnings_from_result(result: CommandResult) -> list[str]:

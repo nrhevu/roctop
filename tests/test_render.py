@@ -22,6 +22,8 @@ class RenderTests(unittest.TestCase):
                     gfx_version="gfx950",
                     temperature_c=60,
                     power_w=266,
+                    sclk_mhz=173,
+                    mclk_mhz=2000,
                     memory_used_bytes=1024 * 1024 * 1024,
                     memory_total_bytes=4 * 1024 * 1024 * 1024,
                     utilization_percent=42,
@@ -42,13 +44,15 @@ class RenderTests(unittest.TestCase):
                 )
             ],
         )
-        console = Console(width=60, record=True, file=StringIO())
+        console = Console(width=120, record=True, file=StringIO())
         console.print(render_snapshot(snapshot))
         output = console.export_text()
         self.assertIn("roctop", output)
         self.assertIn("AMD", output)
         self.assertIn("60°C", output)
         self.assertIn("266W", output)
+        self.assertIn("173MHz", output)
+        self.assertIn("2000MHz", output)
         self.assertIn("123", output)
 
 
