@@ -64,7 +64,7 @@ def run_live(console: Console, interval: float) -> int:
     with (
         TerminalKeyboard() as keyboard,
         Live(
-            render_snapshot(snapshot, history, process_state, console.size.height, console.size.width),
+            render_live_snapshot(snapshot, history, process_state, console),
             console=console,
             screen=True,
             auto_refresh=False,
@@ -79,7 +79,7 @@ def run_live(console: Console, interval: float) -> int:
                 continue
             history.add_snapshot(snapshot)
             live.update(
-                render_snapshot(snapshot, history, process_state, console.size.height, console.size.width),
+                render_live_snapshot(snapshot, history, process_state, console),
                 refresh=True,
             )
 
@@ -94,10 +94,18 @@ def poll_input_until_refresh(
     interval: float,
 ) -> bool:
     deadline = time.monotonic() + interval
+    rendered_size = console_dimensions(console)
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
+        current_size = console_dimensions(console)
+        if current_size != rendered_size:
+            live.update(
+                render_snapshot(snapshot, history, process_state, *current_size),
+                refresh=True,
+            )
+            rendered_size = current_size
         keys = keyboard.read_keys(timeout=min(0.05, remaining))
         if not keys:
             continue
@@ -107,12 +115,22 @@ def poll_input_until_refresh(
             process_state.sync(processes)
             result = process_state.handle_key(key, processes)
             quit_requested = quit_requested or result.quit
+        rendered_size = console_dimensions(console)
         live.update(
-            render_snapshot(snapshot, history, process_state, console.size.height, console.size.width),
+            render_snapshot(snapshot, history, process_state, *rendered_size),
             refresh=True,
         )
         if quit_requested:
             return True
+
+
+def render_live_snapshot(snapshot, history: MetricsHistory, process_state: ProcessViewState, console: Console):
+    return render_snapshot(snapshot, history, process_state, *console_dimensions(console))
+
+
+def console_dimensions(console: Console) -> tuple[int, int]:
+    size = console.size
+    return size.height, size.width
 
 
 def collect_snapshot_retry(interval: float):

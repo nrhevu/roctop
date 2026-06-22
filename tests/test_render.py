@@ -376,6 +376,71 @@ class RenderTests(unittest.TestCase):
         self.assertIn("cmd-104", output)
         self.assertIn("cmd-105", output)
 
+    def test_snapshot_keeps_selected_process_visible_with_graphs(self) -> None:
+        long_args = (
+            "python3 -m sglang.launch_server --model-path "
+            "/scratch/sonle5/hf_cache/models--zai-org--GLM-5.2-FP8/snapshots/31cba24fb749908a485082bdeed6eb1ac6cffc2f "
+            "--served-model-name zai-org/GLM-5.2-FP8 --host 0.0.0.0 --port 30052 "
+            "--tensor-parallel-size 4 --trust-remote-code --context-length 8192 "
+            "--kv-cache-dtype bfloat16 --dsa-prefill-backend aiter --dsa-decode-backend aiter"
+        )
+        processes = [
+            ProcessInfo(
+                gpu_index=index % 8 if index < 5 else None,
+                pid=2000 + index,
+                user="root",
+                cpu_percent=90.0 if index < 5 else 0.4,
+                host_mem_percent=0.1,
+                gpu_memory_percent=92.5 if index < 5 else 0.0,
+                gpu_memory_bytes=1024 * 1024 * 1024 if index < 5 else 0,
+                elapsed="01:02",
+                args="sglang::scheduler" if index < 5 else "python3 -m sglang.launch_server --model-path /models/huggingface",
+            )
+            for index in range(12)
+        ]
+        processes.append(
+            ProcessInfo(
+                gpu_index=None,
+                pid=9999,
+                user="root",
+                cpu_percent=52.8,
+                host_mem_percent=0.0,
+                elapsed="00:45",
+                args=long_args,
+            )
+        )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(
+                    index=index,
+                    memory_used_bytes=1024 * 1024 * 1024,
+                    memory_total_bytes=4 * 1024 * 1024 * 1024,
+                    utilization_percent=42,
+                )
+                for index in range(8)
+            ],
+            processes=processes,
+        )
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=6.8,
+                avg_mem_percent=8.8,
+                avg_gpu_percent=3.8,
+                avg_gpu_mem_percent=29.8,
+            )
+        )
+        state = ProcessViewState(selected_pid=9999, viewport_rows=13)
+        console = Console(width=240, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, history, state, terminal_height=45, terminal_width=240))
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        self.assertLessEqual(len(plain.splitlines()), 45)
+        self.assertIn("9999", plain)
+        self.assertIn("48;2;68;71;90", styled)
+
     def test_process_view_wraps_long_commands_within_visual_height(self) -> None:
         long_args = (
             "python3 -m nexus_titan.cli direct --config /tmp/qwen3_8b_hf_config_ft_pretrain.yaml "

@@ -70,14 +70,14 @@ def estimate_process_view_rows(
 ) -> int | None:
     if terminal_height is None:
         return None
-    used_rows = 3
+    used_rows = 4
     used_rows += len(snapshot.gpus) + 4
     if history is not None:
-        used_rows += 12
+        used_rows += 13
     visible_warnings = ui_warnings(snapshot.warnings)
     if visible_warnings:
         used_rows += min(len(visible_warnings), 6) + 4
-    return max(1, terminal_height - used_rows - 4)
+    return max(1, terminal_height - used_rows - 5)
 
 
 def render_header(
