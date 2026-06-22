@@ -40,6 +40,7 @@ class CollectorTests(unittest.TestCase):
                 "VRAM Total Memory (B)": "308902100992",
                 "VRAM Total Used Memory (B)": "200804560896",
                 "Card Model": "0x75b0",
+                "GUID": "29921",
                 "GFX Version": "gfx950",
             },
             "system": {
@@ -52,6 +53,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(driver, "6.14.14")
         self.assertEqual(len(gpus), 1)
         self.assertEqual(gpus[0].index, 0)
+        self.assertEqual(gpus[0].guid, "29921")
         self.assertEqual(gpus[0].gpu_type, "AMD MI350")
         self.assertEqual(gpus[0].utilization_percent, 99)
         self.assertEqual(gpus[0].fan_percent, 42.0)

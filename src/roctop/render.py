@@ -64,15 +64,14 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
         sclk = format_clock(gpu.sclk_mhz)
         mclk = format_clock(gpu.mclk_mhz)
-        name = gpu.name
-        if gpu.gfx_version and gpu.gfx_version not in name:
-            name = f"{name} {gpu.gfx_version}"
+        name = format_gpu_name(gpu)
+        gpu_type = format_gpu_type(gpu)
         row = [
             str(gpu.index),
             name,
             Text(
-                gpu.gpu_type or "N/A",
-                style=DRACULA_CYAN if gpu.gpu_type else DRACULA_DIM,
+                gpu_type or "N/A",
+                style=DRACULA_CYAN if gpu_type else DRACULA_DIM,
             ),
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(power, style=power_style(gpu.power_w)),
@@ -95,6 +94,21 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
             )
         table.add_row(*row)
     return table
+
+
+def format_gpu_name(gpu: GpuInfo) -> str:
+    if gpu.guid:
+        return f"{gpu.name} GUID:{gpu.guid}"
+    return gpu.name
+
+
+def format_gpu_type(gpu: GpuInfo) -> str:
+    parts = []
+    if gpu.gpu_type:
+        parts.append(gpu.gpu_type)
+    if gpu.gfx_version and gpu.gfx_version.lower() not in gpu.gpu_type.lower():
+        parts.append(gpu.gfx_version)
+    return " ".join(parts)
 
 
 def render_process_table(processes: list[ProcessInfo]) -> Table:

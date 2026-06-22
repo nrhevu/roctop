@@ -151,6 +151,7 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
             GpuInfo(
                 index=index,
                 name=name,
+                guid=first_non_empty(value.get("GUID")),
                 gpu_type=infer_gpu_type(value),
                 gfx_version=gfx_version,
                 temperature_c=parse_optional_float(
