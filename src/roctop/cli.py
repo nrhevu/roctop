@@ -64,7 +64,7 @@ def run_live(console: Console, interval: float) -> int:
     with (
         TerminalKeyboard() as keyboard,
         Live(
-            render_snapshot(snapshot, history, process_state, console.size.height),
+            render_snapshot(snapshot, history, process_state, console.size.height, console.size.width),
             console=console,
             screen=True,
             auto_refresh=False,
@@ -78,7 +78,10 @@ def run_live(console: Console, interval: float) -> int:
             except CommandTimeout:
                 continue
             history.add_snapshot(snapshot)
-            live.update(render_snapshot(snapshot, history, process_state, console.size.height), refresh=True)
+            live.update(
+                render_snapshot(snapshot, history, process_state, console.size.height, console.size.width),
+                refresh=True,
+            )
 
 
 def poll_input_until_refresh(
@@ -104,7 +107,10 @@ def poll_input_until_refresh(
             process_state.sync(processes)
             result = process_state.handle_key(key, processes)
             quit_requested = quit_requested or result.quit
-        live.update(render_snapshot(snapshot, history, process_state, console.size.height), refresh=True)
+        live.update(
+            render_snapshot(snapshot, history, process_state, console.size.height, console.size.width),
+            refresh=True,
+        )
         if quit_requested:
             return True
 

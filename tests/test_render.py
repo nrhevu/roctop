@@ -286,6 +286,35 @@ class RenderTests(unittest.TestCase):
         self.assertIn("cmd-104", output)
         self.assertIn("cmd-105", output)
 
+    def test_process_view_wraps_long_commands_within_visual_height(self) -> None:
+        long_args = (
+            "python3 -m nexus_titan.cli direct --config /tmp/qwen3_8b_hf_config_ft_pretrain.yaml "
+            "--data-path /data --torchtitan-path /opt/NexusTitan/thirdparty/torchtitan --nnodes 2 "
+            "--nproc-per-node 2 --rdzv-backend c10d --master-addr "
+            "q8b-js-2e6cfbb5-0632-4341-b11c-9d7270d66811-replica-0-0."
+            "q8b-js-2e6cfbb5-0632-4341-b11c-9d7270d66811.vunguyen13.svc.cluster.local"
+        )
+        processes = [
+            ProcessInfo(gpu_index=index % 8, pid=200 + index, user="root", args=long_args)
+            for index in range(20)
+        ]
+        state = ProcessViewState(selected_pid=219, viewport_rows=20)
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                processes,
+                process_state=state,
+                max_rows=12,
+                terminal_width=120,
+            )
+        )
+        output = console.export_text()
+        lines = output.splitlines()
+        self.assertIn("219", output)
+        self.assertNotIn("200", output)
+        self.assertLessEqual(max(len(line) for line in lines), 120)
+        self.assertLessEqual(len(lines), 18)
+
 
 if __name__ == "__main__":
     unittest.main()

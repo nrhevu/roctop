@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import textwrap
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -37,10 +38,16 @@ def render_snapshot(
     history: MetricsHistory | None = None,
     process_state: ProcessViewState | None = None,
     terminal_height: int | None = None,
+    terminal_width: int | None = None,
 ) -> Group:
     gpu_table = render_gpu_table(snapshot.gpus)
     process_rows = estimate_process_view_rows(snapshot, history, terminal_height) if process_state else None
-    process_table = render_process_table(snapshot.processes, process_state=process_state, max_rows=process_rows)
+    process_table = render_process_table(
+        snapshot.processes,
+        process_state=process_state,
+        max_rows=process_rows,
+        terminal_width=terminal_width,
+    )
     header = render_header(
         snapshot,
         process_state=process_state,
@@ -299,13 +306,15 @@ def render_process_table(
     processes: list[ProcessInfo],
     process_state: ProcessViewState | None = None,
     max_rows: int | None = None,
+    terminal_width: int | None = None,
 ) -> Table:
     display_processes = list(processes)
     title = None
     caption = None
+    command_width = estimate_process_command_width(terminal_width)
     if process_state is not None:
         display_processes = process_state.sorted_processes(display_processes)
-        process_state.sync(display_processes, max_rows)
+        process_state.sync(display_processes)
         title = Text(process_state.process_title(len(display_processes)), style=DRACULA_DIM)
         caption_text = process_state.caption()
         if caption_text:
@@ -315,7 +324,7 @@ def render_process_table(
             elif process_state.mode == MODE_KILL_CONFIRM:
                 caption_style = DRACULA_RED
             caption = Text(caption_text, style=caption_style)
-        display_processes = process_state.visible_processes(display_processes)
+        display_processes = visible_process_window(display_processes, process_state, max_rows, command_width)
 
     table = Table(
         box=box.SQUARE,
@@ -335,7 +344,7 @@ def render_process_table(
     table.add_column("%CPU", justify="right")
     table.add_column("%MEM", justify="right")
     table.add_column("TIME", justify="right")
-    table.add_column("COMMAND", overflow="fold", ratio=4)
+    table.add_column("COMMAND", overflow="fold", ratio=1, min_width=12)
 
     if not display_processes:
         table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
@@ -345,6 +354,8 @@ def render_process_table(
     for proc in display_processes:
         gpu = "-" if proc.gpu_index is None else str(proc.gpu_index)
         command = proc.args or proc.command or proc.name or "N/A"
+        if process_state is not None:
+            command = wrap_process_command(command, command_width)
         gpu_mem_style = percent_style(proc.gpu_memory_percent)
         table.add_row(
             gpu,
@@ -359,6 +370,65 @@ def render_process_table(
             style=f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}" if selected_pid == proc.pid else None,
         )
     return table
+
+
+def visible_process_window(
+    processes: list[ProcessInfo],
+    process_state: ProcessViewState,
+    max_visual_rows: int | None,
+    command_width: int,
+) -> list[ProcessInfo]:
+    if not processes:
+        process_state.sync(processes)
+        return []
+    selected_index = max(0, min(process_state.selected_index, len(processes) - 1))
+    max_visual_rows = max(1, max_visual_rows or process_state.viewport_rows)
+    row_heights = [process_visual_height(proc, command_width) for proc in processes]
+
+    start = selected_index
+    end = selected_index + 1
+    used_rows = row_heights[selected_index]
+
+    while start > 0 and used_rows + row_heights[start - 1] <= max_visual_rows:
+        start -= 1
+        used_rows += row_heights[start]
+    while end < len(processes) and used_rows + row_heights[end] <= max_visual_rows:
+        used_rows += row_heights[end]
+        end += 1
+
+    process_state.scroll_offset = start
+    process_state.viewport_rows = max(1, end - start)
+    return processes[start:end]
+
+
+def process_visual_height(proc: ProcessInfo, command_width: int) -> int:
+    command = proc.args or proc.command or proc.name or "N/A"
+    return max(1, len(wrap_command_lines(command, command_width)))
+
+
+def estimate_process_command_width(terminal_width: int | None) -> int:
+    if terminal_width is None:
+        return 80
+    return max(18, terminal_width - 82)
+
+
+def wrap_process_command(command: str, width: int) -> str:
+    return "\n".join(wrap_command_lines(command, width))
+
+
+def wrap_command_lines(command: str, width: int) -> list[str]:
+    text = str(command or "N/A")
+    lines: list[str] = []
+    for raw_line in text.splitlines() or [""]:
+        wrapped = textwrap.wrap(
+            raw_line,
+            width=max(1, width),
+            break_long_words=True,
+            break_on_hyphens=False,
+            drop_whitespace=True,
+        )
+        lines.extend(wrapped or [""])
+    return lines or [""]
 
 
 def metric_text(value: float | int | None, digits: int = 1) -> Text:
