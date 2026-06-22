@@ -3,10 +3,12 @@ from __future__ import annotations
 import unittest
 
 from roctop.collectors import (
+    CommandTimeout,
     load_json_from_text,
     merge_process_sources,
     parse_amd_smi_process_json,
     parse_rocm_smi_json,
+    run_command,
 )
 from roctop.formatting import format_bytes_mib
 from roctop.models import ProcessInfo
@@ -16,6 +18,14 @@ class CollectorTests(unittest.TestCase):
     def test_load_json_from_text_skips_warning_prefix(self) -> None:
         data = load_json_from_text('WARNING: noisy\n{"ok": true}')
         self.assertEqual(data, {"ok": True})
+
+    def test_run_command_raises_command_timeout(self) -> None:
+        import subprocess
+        from unittest.mock import patch
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["rocm-smi"], 1)):
+            with self.assertRaises(CommandTimeout):
+                run_command(["rocm-smi"], timeout=1)
 
     def test_parse_rocm_smi_json(self) -> None:
         raw = {

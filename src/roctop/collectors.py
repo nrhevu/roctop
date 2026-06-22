@@ -28,6 +28,7 @@ ROCM_SMI_ARGS = [
 ]
 
 AMD_SMI_PROCESS_ARGS = ["amd-smi", "process", "-G", "--json"]
+ROCM_SMI_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(slots=True)
@@ -39,6 +40,10 @@ class CommandResult:
 
 
 class CollectionError(RuntimeError):
+    pass
+
+
+class CommandTimeout(CollectionError):
     pass
 
 
@@ -54,7 +59,7 @@ def run_command(args: list[str], timeout: float = 5.0) -> CommandResult:
     except FileNotFoundError as exc:
         raise CollectionError(f"Command not found: {args[0]}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise CollectionError(f"Command timed out: {' '.join(shlex.quote(a) for a in args)}") from exc
+        raise CommandTimeout(f"Command timed out: {' '.join(shlex.quote(a) for a in args)}") from exc
 
     return CommandResult(
         args=args,
@@ -68,7 +73,7 @@ def collect_snapshot(now: datetime | None = None) -> Snapshot:
     now = now or datetime.now()
     warnings: list[str] = []
 
-    rocm_result = run_command(ROCM_SMI_ARGS)
+    rocm_result = run_command(ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS)
     warnings.extend(_warnings_from_result(rocm_result))
     if rocm_result.returncode != 0 and not rocm_result.stdout.strip():
         raise CollectionError(_command_failure_message(rocm_result))
@@ -82,6 +87,8 @@ def collect_snapshot(now: datetime | None = None) -> Snapshot:
         warnings.extend(_warnings_from_result(amd_result))
         if amd_result.returncode == 0 and amd_result.stdout.strip():
             process_rows = parse_amd_smi_process_json(load_json_from_text(amd_result.stdout), gpus)
+    except CommandTimeout:
+        pass
     except (CollectionError, json.JSONDecodeError, ValueError) as exc:
         warnings.append(f"amd-smi process unavailable: {exc}")
 

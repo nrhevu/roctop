@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.live import Live
 
 from . import __version__
-from .collectors import CollectionError, collect_snapshot
+from .collectors import CollectionError, CommandTimeout, collect_snapshot
 from .render import render_snapshot
 
 
@@ -37,12 +37,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.json:
-            snapshot = collect_snapshot()
+            snapshot = collect_snapshot_retry(args.interval)
             print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
             return 0
 
         if args.once:
-            snapshot = collect_snapshot()
+            snapshot = collect_snapshot_retry(args.interval)
             console.print(render_snapshot(snapshot))
             return 0
 
@@ -53,10 +53,23 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_live(console: Console, interval: float) -> int:
-    snapshot = collect_snapshot()
+    snapshot = collect_snapshot_retry(interval)
     with Live(render_snapshot(snapshot), console=console, screen=True, auto_refresh=False) as live:
         while True:
-            live.update(render_snapshot(collect_snapshot()), refresh=True)
+            try:
+                snapshot = collect_snapshot()
+            except CommandTimeout:
+                time.sleep(interval)
+                continue
+            live.update(render_snapshot(snapshot), refresh=True)
+            time.sleep(interval)
+
+
+def collect_snapshot_retry(interval: float):
+    while True:
+        try:
+            return collect_snapshot()
+        except CommandTimeout:
             time.sleep(interval)
 
 
