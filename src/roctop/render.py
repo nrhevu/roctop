@@ -199,7 +199,14 @@ def metric_graph_lines(
             else:
                 line.append(" ")
         lines.append(line)
-    return lines
+    return trim_empty_graph_lines(lines)
+
+
+def trim_empty_graph_lines(lines: list[Text]) -> list[Text]:
+    first_visible = 0
+    while first_visible < len(lines) and not lines[first_visible].plain.strip():
+        first_visible += 1
+    return lines[first_visible:] or lines[-1:]
 
 
 def braille_graph_mask(filled_rows: int, line_top_level: int, rows_per_line: int) -> int:

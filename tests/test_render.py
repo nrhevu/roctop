@@ -136,8 +136,7 @@ class RenderTests(unittest.TestCase):
 
     def test_low_history_values_draw_visible_trace_on_right(self) -> None:
         lines = metric_graph_lines([None, 5.0, 12.0], width=6, height=15, style="green")
-        self.assertEqual(len(lines), 4)
-        self.assertEqual([line.plain for line in lines[:3]], ["      ", "      ", "      "])
+        self.assertEqual(len(lines), 1)
         self.assertEqual(lines[-1].plain, "    ⠤⠶")
 
     def test_fan_column_visible_when_unsupported(self) -> None:
