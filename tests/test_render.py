@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
-from roctop.render import bar_with_percent, render_snapshot
+from roctop.render import bar_with_percent, percent_style, render_snapshot
 
 
 class RenderTests(unittest.TestCase):
@@ -81,10 +81,10 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Fan", output)
 
     def test_high_util_bar_uses_red_style(self) -> None:
-        console = Console(width=80, force_terminal=True, color_system="standard", record=True, file=StringIO())
-        console.print(bar_with_percent(100, "bold red"))
+        console = Console(width=80, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(bar_with_percent(100, percent_style(100)))
         output = console.export_text(styles=True)
-        self.assertIn("\x1b[1;31m", output)
+        self.assertIn("38;2;255;85;85", output)
         self.assertIn("100%", output)
 
 

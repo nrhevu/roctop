@@ -9,6 +9,14 @@ from rich.text import Text
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .models import GpuInfo, ProcessInfo, Snapshot
 
+DRACULA_GREEN = "#50fa7b"
+DRACULA_YELLOW = "#f1fa8c"
+DRACULA_RED = "#ff5555"
+DRACULA_CYAN = "#8be9fd"
+DRACULA_TRACK = "#3a3a3a"
+DRACULA_DIM = "#6272a4"
+DRACULA_FG = "#f8f8f2"
+
 
 def render_snapshot(snapshot: Snapshot) -> Group:
     header = render_header(snapshot)
@@ -22,15 +30,15 @@ def render_snapshot(snapshot: Snapshot) -> Group:
 
 
 def render_header(snapshot: Snapshot) -> Panel:
-    title = Text("roctop", style="bold cyan")
+    title = Text("roctop", style=f"bold {DRACULA_CYAN}")
     timestamp = snapshot.timestamp.strftime("%a %b %d %H:%M:%S %Y")
     details = Text()
-    details.append(timestamp, style="white")
+    details.append(timestamp, style=DRACULA_FG)
     if snapshot.driver_version:
-        details.append("   ROCm Driver: ", style="dim")
-        details.append(snapshot.driver_version, style="green")
-    details.append("   Press Ctrl-C to quit", style="dim")
-    return Panel(details, title=title, border_style="bright_black", box=box.SQUARE)
+        details.append("   ROCm Driver: ", style=DRACULA_DIM)
+        details.append(snapshot.driver_version, style=DRACULA_GREEN)
+    details.append("   Press Ctrl-C to quit", style=DRACULA_DIM)
+    return Panel(details, title=title, border_style=DRACULA_DIM, box=box.SQUARE)
 
 
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:
@@ -73,7 +81,13 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
             bar_with_percent(gpu.utilization_percent, util_style),
         ]
         if has_fan:
-            row.insert(3, Text(format_fan(gpu.fan_percent, gpu.fan_rpm), style=fan_style(gpu.fan_percent, gpu.fan_rpm)))
+            row.insert(
+                3,
+                Text(
+                    format_fan(gpu.fan_percent, gpu.fan_rpm),
+                    style=fan_style(gpu.fan_percent, gpu.fan_rpm),
+                ),
+            )
         table.add_row(*row)
     return table
 
@@ -117,10 +131,10 @@ def render_warnings(warnings: list[str]) -> Panel:
     for index, warning in enumerate(warnings[:6]):
         if index:
             text.append("\n")
-        text.append(warning, style="yellow")
+        text.append(warning, style=DRACULA_YELLOW)
     if len(warnings) > 6:
-        text.append(f"\n... {len(warnings) - 6} more warnings", style="yellow")
-    return Panel(text, title="Warnings", border_style="yellow", box=box.SQUARE)
+        text.append(f"\n... {len(warnings) - 6} more warnings", style=DRACULA_YELLOW)
+    return Panel(text, title="Warnings", border_style=DRACULA_YELLOW, box=box.SQUARE)
 
 
 def ui_warnings(warnings: list[str]) -> list[str]:
@@ -155,27 +169,27 @@ def progress_text(percent: float, style: str, width: int = 48) -> Text:
     if completed:
         text.append("━" * completed, style=style)
     if completed < width:
-        text.append("━" * (width - completed), style="grey23")
+        text.append("━" * (width - completed), style=DRACULA_TRACK)
     return text
 
 
 def percent_style(percent: float | int | None) -> str:
     value = clamp_percent(percent)
     if value >= 80:
-        return "bold red"
+        return f"bold {DRACULA_RED}"
     if value >= 50:
-        return "yellow"
-    return "green"
+        return DRACULA_YELLOW
+    return DRACULA_GREEN
 
 
 def temp_style(temp_c: float | None) -> str:
     if temp_c is None:
-        return "dim"
+        return DRACULA_DIM
     if temp_c >= 80:
-        return "bold red"
+        return f"bold {DRACULA_RED}"
     if temp_c >= 65:
-        return "yellow"
-    return "green"
+        return DRACULA_YELLOW
+    return DRACULA_GREEN
 
 
 def format_fan(fan_percent: float | None, fan_rpm: int | None) -> str:
@@ -188,20 +202,20 @@ def format_fan(fan_percent: float | None, fan_rpm: int | None) -> str:
 
 def fan_style(fan_percent: float | None, fan_rpm: int | None) -> str:
     if fan_percent is None and fan_rpm is None:
-        return "dim"
+        return DRACULA_DIM
     if fan_percent is not None:
         return percent_style(fan_percent)
-    return "green"
+    return DRACULA_GREEN
 
 
 def power_style(power_w: float | None) -> str:
     if power_w is None:
-        return "dim"
+        return DRACULA_DIM
     if power_w >= 350:
-        return "bold red"
+        return f"bold {DRACULA_RED}"
     if power_w >= 250:
-        return "yellow"
-    return "green"
+        return DRACULA_YELLOW
+    return DRACULA_GREEN
 
 
 def format_clock(clock_mhz: int | None) -> str:
@@ -212,5 +226,5 @@ def format_clock(clock_mhz: int | None) -> str:
 
 def clock_style(clock_mhz: int | None) -> str:
     if clock_mhz is None:
-        return "dim"
-    return "cyan"
+        return DRACULA_DIM
+    return DRACULA_CYAN

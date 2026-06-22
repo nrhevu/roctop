@@ -28,8 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    console = Console()
-    error_console = Console(stderr=True)
+    console = Console(color_system="truecolor")
+    error_console = Console(stderr=True, color_system="truecolor")
 
     if args.interval <= 0:
         error_console.print("[red]--interval must be greater than 0[/red]")
