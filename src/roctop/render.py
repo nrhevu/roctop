@@ -1,28 +1,40 @@
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+from typing import Sequence
+
 from rich import box
-from rich.console import Group
+from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
+from .history import MetricsHistory
 from .models import GpuInfo, ProcessInfo, Snapshot
 
 DRACULA_GREEN = "#50fa7b"
 DRACULA_YELLOW = "#f1fa8c"
 DRACULA_RED = "#ff5555"
 DRACULA_CYAN = "#8be9fd"
+DRACULA_PINK = "#ff79c6"
+DRACULA_ORANGE = "#ffb86c"
 DRACULA_TRACK = "#3a3a3a"
 DRACULA_DIM = "#6272a4"
 DRACULA_FG = "#f8f8f2"
+GRAPH_ROWS_PER_LINE = 4
+BRAILLE_DOTS_BY_SUBROW = (0x09, 0x12, 0x24, 0xC0)
 
 
-def render_snapshot(snapshot: Snapshot) -> Group:
+def render_snapshot(snapshot: Snapshot, history: MetricsHistory | None = None) -> Group:
     header = render_header(snapshot)
     gpu_table = render_gpu_table(snapshot.gpus)
     process_table = render_process_table(snapshot.processes)
-    parts = [header, gpu_table, process_table]
+    parts = [header, gpu_table]
+    if history is not None:
+        parts.append(render_metrics_graphs(history))
+    parts.append(process_table)
     visible_warnings = ui_warnings(snapshot.warnings)
     if visible_warnings:
         parts.append(render_warnings(visible_warnings))
@@ -114,6 +126,105 @@ def unique_non_empty(values) -> list[str]:
         seen.add(key)
         unique.append(text)
     return unique
+
+
+def render_metrics_graphs(history: MetricsHistory) -> Table:
+    table = Table(box=box.SQUARE, expand=True, show_header=False, padding=(0, 1))
+    table.add_column(ratio=1)
+    table.add_column(ratio=1)
+    table.add_row(
+        MetricGraph(history, "avg_cpu_percent", "Avg %CPU", DRACULA_CYAN),
+        MetricGraph(history, "avg_gpu_percent", "Avg %GPU", DRACULA_ORANGE),
+    )
+    table.add_row(
+        MetricGraph(history, "avg_mem_percent", "Avg %MEM", DRACULA_PINK),
+        MetricGraph(history, "avg_gpu_mem_percent", "Avg %GPU MEM", DRACULA_YELLOW),
+    )
+    return table
+
+
+@dataclass(frozen=True, slots=True)
+class MetricGraph:
+    history: MetricsHistory
+    metric_name: str
+    label: str
+    style: str
+    height: int = 15
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        width = max(8, options.max_width)
+        values = [getattr(sample, self.metric_name) for sample in self.history.samples]
+        current = latest_value(values)
+        label = Text(no_wrap=True, overflow="ellipsis")
+        label.append(f"{self.label}: ", style=DRACULA_FG)
+        if current is None:
+            label.append("N/A", style=DRACULA_DIM)
+        else:
+            label.append(percent_text(current, digits=1), style=self.style)
+        yield label
+        yield from metric_graph_lines(values, width=width, height=self.height, style=self.style)
+
+
+def latest_value(values: Sequence[float | None]) -> float | None:
+    for value in reversed(values):
+        if value is not None:
+            return value
+    return None
+
+
+def metric_graph_lines(
+    values: Sequence[float | None],
+    width: int,
+    height: int,
+    style: str,
+    rows_per_line: int = GRAPH_ROWS_PER_LINE,
+) -> list[Text]:
+    width = max(1, width)
+    height = max(1, height)
+    rows_per_line = max(1, min(rows_per_line, len(BRAILLE_DOTS_BY_SUBROW)))
+    recent_values = list(values[-width:])
+    padded_values: list[float | None] = [None] * (width - len(recent_values)) + recent_values
+    lines: list[Text] = []
+    for line_top_level in range(height, 0, -rows_per_line):
+        line = Text(no_wrap=True, overflow="crop")
+        for value in padded_values:
+            filled_rows = graph_filled_rows(value, height)
+            active_mask = braille_graph_mask(
+                filled_rows=filled_rows,
+                line_top_level=line_top_level,
+                rows_per_line=rows_per_line,
+            )
+            if active_mask:
+                line.append(braille_char(active_mask), style=style)
+            else:
+                line.append(" ")
+        lines.append(line)
+    return lines
+
+
+def braille_graph_mask(filled_rows: int, line_top_level: int, rows_per_line: int) -> int:
+    mask = 0
+    for subrow in range(rows_per_line):
+        level = line_top_level - subrow
+        if level <= 0:
+            continue
+        dot_mask = BRAILLE_DOTS_BY_SUBROW[subrow]
+        if filled_rows >= level:
+            mask |= dot_mask
+    return mask
+
+
+def braille_char(mask: int) -> str:
+    return chr(0x2800 + mask)
+
+
+def graph_filled_rows(value: float | None, height: int) -> int:
+    if value is None:
+        return 0
+    percent = clamp_percent(value)
+    if percent <= 0:
+        return 0
+    return max(1, min(height, math.ceil(percent / 100.0 * height)))
 
 
 def render_process_table(processes: list[ProcessInfo]) -> Table:

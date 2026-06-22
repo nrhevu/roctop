@@ -9,6 +9,7 @@ from rich.live import Live
 
 from . import __version__
 from .collectors import CollectionError, CommandTimeout, collect_snapshot
+from .history import MetricsHistory
 from .render import render_snapshot
 
 
@@ -53,15 +54,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_live(console: Console, interval: float) -> int:
+    history = MetricsHistory(max_samples=120)
     snapshot = collect_snapshot_retry(interval)
-    with Live(render_snapshot(snapshot), console=console, screen=True, auto_refresh=False) as live:
+    history.add_snapshot(snapshot)
+    with Live(render_snapshot(snapshot, history), console=console, screen=True, auto_refresh=False) as live:
         while True:
             try:
                 snapshot = collect_snapshot()
             except CommandTimeout:
                 time.sleep(interval)
                 continue
-            live.update(render_snapshot(snapshot), refresh=True)
+            history.add_snapshot(snapshot)
+            live.update(render_snapshot(snapshot, history), refresh=True)
             time.sleep(interval)
 
 

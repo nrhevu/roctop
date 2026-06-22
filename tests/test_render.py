@@ -6,8 +6,15 @@ from datetime import datetime
 
 from rich.console import Console
 
+from roctop.history import MetricSample, MetricsHistory
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
-from roctop.render import bar_with_percent, percent_style, render_process_table, render_snapshot
+from roctop.render import (
+    bar_with_percent,
+    metric_graph_lines,
+    percent_style,
+    render_process_table,
+    render_snapshot,
+)
 
 
 class RenderTests(unittest.TestCase):
@@ -77,6 +84,61 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
         self.assertIn("%GPU-MEM", output)
+        self.assertNotIn("Avg %CPU", output)
+
+    def test_snapshot_renders_history_graphs_between_tables(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(
+                    index=0,
+                    memory_used_bytes=1024 * 1024 * 1024,
+                    memory_total_bytes=4 * 1024 * 1024 * 1024,
+                    utilization_percent=42,
+                )
+            ],
+            processes=[
+                ProcessInfo(
+                    gpu_index=0,
+                    pid=123,
+                    user="root",
+                    cpu_percent=12.3,
+                    host_mem_percent=0.4,
+                    elapsed="01:02",
+                    args="python train.py",
+                    gpu_memory_bytes=512 * 1024 * 1024,
+                    gpu_memory_percent=12.5,
+                )
+            ],
+        )
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=37.3,
+                avg_mem_percent=77.2,
+                avg_gpu_percent=33.2,
+                avg_gpu_mem_percent=54.6,
+            )
+        )
+        narrow_console = Console(width=80, record=True, file=StringIO())
+        narrow_console.print(render_snapshot(snapshot, history))
+
+        console = Console(width=180, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, history))
+        output = console.export_text()
+        self.assertIn("Avg %CPU: 37.3%", output)
+        self.assertIn("Avg %GPU: 33.2%", output)
+        self.assertIn("Avg %MEM: 77.2%", output)
+        self.assertIn("Avg %GPU MEM: 54.6%", output)
+        self.assertLess(output.index("UTL"), output.index("Avg %CPU"))
+        self.assertLess(output.index("Avg %CPU"), output.index("PID"))
+
+    def test_low_history_values_draw_visible_trace_on_right(self) -> None:
+        lines = metric_graph_lines([None, 5.0, 12.0], width=6, height=15, style="green")
+        self.assertEqual(len(lines), 4)
+        self.assertEqual([line.plain for line in lines[:3]], ["      ", "      ", "      "])
+        self.assertEqual(lines[-1].plain, "    ⠤⠶")
 
     def test_fan_column_visible_when_unsupported(self) -> None:
         snapshot = Snapshot(
