@@ -45,7 +45,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     has_fan = any(gpu.fan_percent is not None or gpu.fan_rpm is not None for gpu in gpus)
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
-    table.add_column("Name", overflow="fold")
+    table.add_column("IDs (DID, GUID)", overflow="fold")
     table.add_column("Type", overflow="fold")
     table.add_column("Temp", justify="right")
     if has_fan:

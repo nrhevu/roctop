@@ -54,6 +54,8 @@ class RenderTests(unittest.TestCase):
         console.print(render_snapshot(snapshot))
         output = console.export_text()
         self.assertIn("roctop", output)
+        self.assertIn("IDs (DID, GUID)", output)
+        self.assertNotIn("Name", output)
         self.assertIn("AMD", output)
         self.assertIn("AMD Instinct 29921", output)
         self.assertNotIn("GUID:", output)
