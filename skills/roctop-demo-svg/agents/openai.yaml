@@ -1,0 +1,4 @@
+interface:
+  display_name: "roctop Demo SVG"
+  short_description: "Render deterministic roctop demo SVGs"
+  default_prompt: "Use $roctop-demo-svg to refresh docs/demo.svg with synthetic 8-GPU demo data."
