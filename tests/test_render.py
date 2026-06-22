@@ -13,9 +13,14 @@ from roctop.render import (
     bar_with_percent,
     metric_graph_lines,
     percent_style,
+    render_metrics_graphs,
     render_process_table,
     render_snapshot,
 )
+
+
+def has_braille_dots(text: str) -> bool:
+    return any("\u2801" <= char <= "\u28ff" for char in text)
 
 
 class RenderTests(unittest.TestCase):
@@ -132,6 +137,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Avg %GPU: 33.2%", output)
         self.assertIn("Avg %MEM: 77.2%", output)
         self.assertIn("Avg %GPU MEM: 54.6%", output)
+        self.assertIn("120s", output)
+        self.assertIn("60s", output)
+        self.assertIn("30s", output)
+        self.assertLess(output.index("Avg %CPU: 37.3%"), output.index("120s"))
+        self.assertLess(output.index("120s"), output.index("Avg %MEM: 77.2%"))
+        self.assertLess(output.index("Avg %GPU MEM: 54.6%"), output.index("Avg %GPU: 33.2%"))
         self.assertLess(output.index("UTL"), output.index("Avg %CPU"))
         self.assertLess(output.index("Avg %CPU"), output.index("PID"))
 
@@ -139,6 +150,49 @@ class RenderTests(unittest.TestCase):
         lines = metric_graph_lines([None, 5.0, 12.0], width=6, height=15, style="green")
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[-1].plain, "    ⠤⠶")
+
+    def test_metric_graph_pair_keeps_axes_and_bottom_labels_aligned(self) -> None:
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=3.0,
+                avg_mem_percent=8.0,
+                avg_gpu_percent=4.0,
+                avg_gpu_mem_percent=55.0,
+            )
+        )
+        console = Console(width=180, record=True, file=StringIO())
+        console.print(render_metrics_graphs(history))
+        lines = console.export_text().splitlines()
+        axis_lines = [index for index, line in enumerate(lines) if "120s" in line]
+        bottom_label_lines = [
+            index for index, line in enumerate(lines) if "Avg %MEM:" in line and "Avg %GPU:" in line
+        ]
+        self.assertEqual(len(axis_lines), 1)
+        self.assertEqual(len(bottom_label_lines), 1)
+        self.assertLess(axis_lines[0], bottom_label_lines[0])
+
+    def test_metric_graph_bottom_half_sticks_to_time_axis(self) -> None:
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=0.0,
+                avg_mem_percent=8.0,
+                avg_gpu_percent=8.0,
+                avg_gpu_mem_percent=0.0,
+            )
+        )
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render_metrics_graphs(history))
+        lines = console.export_text().splitlines()
+        axis_index = next(index for index, line in enumerate(lines) if "120s" in line)
+        bottom_label_index = next(index for index, line in enumerate(lines) if "Avg %MEM:" in line)
+        first_bottom_graph_line = lines[axis_index + 1]
+        last_bottom_graph_line = lines[bottom_label_index - 1]
+        self.assertTrue(has_braille_dots(first_bottom_graph_line))
+        self.assertFalse(has_braille_dots(last_bottom_graph_line))
 
     def test_fan_column_visible_when_unsupported(self) -> None:
         snapshot = Snapshot(

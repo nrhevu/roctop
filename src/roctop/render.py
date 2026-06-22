@@ -197,36 +197,71 @@ def render_metrics_graphs(history: MetricsHistory) -> Table:
     table.add_column(ratio=1)
     table.add_column(ratio=1)
     table.add_row(
-        MetricGraph(history, "avg_cpu_percent", "Avg %CPU", DRACULA_CYAN),
-        MetricGraph(history, "avg_gpu_percent", "Avg %GPU", DRACULA_ORANGE),
-    )
-    table.add_row(
-        MetricGraph(history, "avg_mem_percent", "Avg %MEM", DRACULA_PINK),
-        MetricGraph(history, "avg_gpu_mem_percent", "Avg %GPU MEM", DRACULA_YELLOW),
+        MetricGraphPair(
+            history=history,
+            top_metric_name="avg_cpu_percent",
+            top_label="Avg %CPU",
+            top_style=DRACULA_CYAN,
+            bottom_metric_name="avg_mem_percent",
+            bottom_label="Avg %MEM",
+            bottom_style=DRACULA_PINK,
+        ),
+        MetricGraphPair(
+            history=history,
+            top_metric_name="avg_gpu_mem_percent",
+            top_label="Avg %GPU MEM",
+            top_style=DRACULA_YELLOW,
+            bottom_metric_name="avg_gpu_percent",
+            bottom_label="Avg %GPU",
+            bottom_style=DRACULA_ORANGE,
+        ),
     )
     return table
 
 
 @dataclass(frozen=True, slots=True)
-class MetricGraph:
+class MetricGraphPair:
     history: MetricsHistory
-    metric_name: str
-    label: str
-    style: str
+    top_metric_name: str
+    top_label: str
+    top_style: str
+    bottom_metric_name: str
+    bottom_label: str
+    bottom_style: str
     height: int = 15
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        width = max(8, options.max_width)
-        values = [getattr(sample, self.metric_name) for sample in self.history.samples]
-        current = latest_value(values)
-        label = Text(no_wrap=True, overflow="ellipsis")
-        label.append(f"{self.label}: ", style=DRACULA_FG)
-        if current is None:
-            label.append("N/A", style=DRACULA_DIM)
-        else:
-            label.append(percent_text(current, digits=1), style=self.style)
-        yield label
-        yield from metric_graph_lines(values, width=width, height=self.height, style=self.style)
+        width = max(12, options.max_width)
+        top_values = [getattr(sample, self.top_metric_name) for sample in self.history.samples]
+        bottom_values = [getattr(sample, self.bottom_metric_name) for sample in self.history.samples]
+        yield metric_label(self.top_label, latest_value(top_values), self.top_style)
+        yield from metric_graph_lines(top_values, width=width, height=self.height, style=self.top_style, trim_empty=False)
+        yield time_axis_line(width)
+        yield from reversed(
+            metric_graph_lines(bottom_values, width=width, height=self.height, style=self.bottom_style, trim_empty=False)
+        )
+        yield metric_label(self.bottom_label, latest_value(bottom_values), self.bottom_style)
+
+
+def metric_label(label: str, value: float | None, style: str) -> Text:
+    text = Text(no_wrap=True, overflow="ellipsis")
+    text.append(f"{label}: ", style=DRACULA_FG)
+    if value is None:
+        text.append("N/A", style=DRACULA_DIM)
+    else:
+        text.append(percent_text(value, digits=1), style=style)
+    return text
+
+
+def time_axis_line(width: int) -> Text:
+    width = max(1, width)
+    chars = ["─"] * width
+    for ratio, label in ((0.18, "120s"), (0.52, "60s"), (0.75, "30s")):
+        if width < len(label) + 2:
+            continue
+        start = max(0, min(width - len(label), int(width * ratio) - len(label) // 2))
+        chars[start : start + len(label)] = list(label)
+    return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
 
 
 def latest_value(values: Sequence[float | None]) -> float | None:
@@ -242,6 +277,7 @@ def metric_graph_lines(
     height: int,
     style: str,
     rows_per_line: int = GRAPH_ROWS_PER_LINE,
+    trim_empty: bool = True,
 ) -> list[Text]:
     width = max(1, width)
     height = max(1, height)
@@ -263,7 +299,9 @@ def metric_graph_lines(
             else:
                 line.append(" ")
         lines.append(line)
-    return trim_empty_graph_lines(lines)
+    if trim_empty:
+        return trim_empty_graph_lines(lines)
+    return lines
 
 
 def trim_empty_graph_lines(lines: list[Text]) -> list[Text]:
