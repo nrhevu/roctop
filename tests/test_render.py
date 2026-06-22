@@ -291,6 +291,20 @@ class RenderTests(unittest.TestCase):
         console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
         self.assertIn("%CPU ↑", console.export_text())
 
+    def test_sort_menu_highlights_selected_field_without_pointer_text(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="root", args="python train.py"),
+        ]
+        state = ProcessViewState(selected_pid=123, mode="sort_menu", sort_menu_index=4, viewport_rows=4)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        self.assertIn("Sort by:", plain)
+        self.assertIn("%MEM", plain)
+        self.assertNotIn(">%MEM", plain)
+        self.assertIn("48;2;68;71;90", styled)
+
     def test_process_view_state_limits_visible_rows(self) -> None:
         processes = [
             ProcessInfo(gpu_index=0, pid=101, args="cmd-101"),

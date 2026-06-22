@@ -5,8 +5,10 @@ import unittest
 from roctop.interaction import (
     KEY_DOWN,
     KEY_ENTER,
+    KEY_LEFT,
     KEY_PAGE_DOWN,
     KEY_PAGE_UP,
+    KEY_RIGHT,
     KEY_UP,
     MODE_KILL_CONFIRM,
     MODE_NORMAL,
@@ -25,8 +27,8 @@ def proc(pid: int, **kwargs) -> ProcessInfo:
 class InteractionTests(unittest.TestCase):
     def test_parse_keys_maps_arrows_pages_enter_and_escape(self) -> None:
         self.assertEqual(
-            parse_keys(b"j\x1b[A\x1b[B\x1b[5~\x1b[6~\r\x1b"),
-            ["j", KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_ENTER, "esc"],
+            parse_keys(b"j\x1b[A\x1b[B\x1b[C\x1b[D\x1b[5~\x1b[6~\r\x1b"),
+            ["j", KEY_UP, KEY_DOWN, KEY_RIGHT, KEY_LEFT, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_ENTER, "esc"],
         )
 
     def test_cursor_movement_and_page_keys_clamp(self) -> None:
@@ -58,7 +60,7 @@ class InteractionTests(unittest.TestCase):
         state.handle_key("s", processes)
         self.assertEqual(state.mode, MODE_SORT_MENU)
         for _ in range(3):
-            state.handle_key("j", processes)
+            state.handle_key("k", processes)
         state.handle_key(KEY_ENTER, processes)
         self.assertEqual(state.mode, MODE_NORMAL)
         self.assertEqual(state.sort_field, "cpu")
@@ -69,6 +71,20 @@ class InteractionTests(unittest.TestCase):
         state.handle_key(KEY_ENTER, processes)
         self.assertFalse(state.sort_desc)
         self.assertEqual([row.pid for row in state.sorted_processes(processes)], [1, 3, 2])
+
+    def test_sort_menu_uses_down_left_for_left_and_up_right_for_right(self) -> None:
+        processes = [proc(1)]
+        state = ProcessViewState(viewport_rows=3)
+        state.handle_key("s", processes)
+        self.assertEqual(state.sort_menu_index, 0)
+        state.handle_key(KEY_UP, processes)
+        self.assertEqual(state.sort_menu_index, 1)
+        state.handle_key(KEY_RIGHT, processes)
+        self.assertEqual(state.sort_menu_index, 2)
+        state.handle_key(KEY_DOWN, processes)
+        self.assertEqual(state.sort_menu_index, 1)
+        state.handle_key(KEY_LEFT, processes)
+        self.assertEqual(state.sort_menu_index, 0)
 
     def test_cursor_tracks_selected_pid_after_sort_refresh(self) -> None:
         processes = [

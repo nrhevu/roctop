@@ -14,6 +14,8 @@ from .models import ProcessInfo
 
 KEY_UP = "up"
 KEY_DOWN = "down"
+KEY_LEFT = "left"
+KEY_RIGHT = "right"
 KEY_PAGE_UP = "page_up"
 KEY_PAGE_DOWN = "page_down"
 KEY_ENTER = "enter"
@@ -158,7 +160,7 @@ class ProcessViewState:
         if key == "s":
             self.mode = MODE_SORT_MENU
             self.sort_menu_index = current_sort_menu_index(self.sort_field)
-            self.status_message = "Select sort field with j/k, Enter to apply, Esc to cancel"
+            self.status_message = ""
             return KeyResult(changed=True)
         if key == "x":
             selected = self.selected_process(processes)
@@ -199,11 +201,11 @@ class ProcessViewState:
         return KeyResult(changed=True)
 
     def handle_sort_menu_key(self, key: str) -> KeyResult:
-        if key in ("j", KEY_DOWN):
-            self.sort_menu_index = min(len(SORT_OPTIONS) - 1, self.sort_menu_index + 1)
-            return KeyResult(changed=True)
-        if key in ("k", KEY_UP):
+        if key in ("j", KEY_DOWN, KEY_LEFT):
             self.sort_menu_index = max(0, self.sort_menu_index - 1)
+            return KeyResult(changed=True)
+        if key in ("k", KEY_UP, KEY_RIGHT):
+            self.sort_menu_index = min(len(SORT_OPTIONS) - 1, self.sort_menu_index + 1)
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q"):
             self.mode = MODE_NORMAL
@@ -256,8 +258,6 @@ class ProcessViewState:
         return f"Processes  {self.selected_index + 1}/{process_count}"
 
     def caption(self) -> str:
-        if self.mode == MODE_SORT_MENU:
-            return sort_menu_text(self.sort_menu_index)
         return self.status_message
 
 
@@ -314,6 +314,8 @@ def parse_keys(data: bytes | str) -> list[str]:
         for raw, key in (
             ("\x1b[A", KEY_UP),
             ("\x1b[B", KEY_DOWN),
+            ("\x1b[C", KEY_RIGHT),
+            ("\x1b[D", KEY_LEFT),
             ("\x1b[5~", KEY_PAGE_UP),
             ("\x1b[6~", KEY_PAGE_DOWN),
         ):
@@ -381,14 +383,6 @@ def current_sort_menu_index(sort_field: str) -> int:
         return SORT_OPTIONS.index(sort_field)
     except ValueError:
         return 0
-
-
-def sort_menu_text(selected_index: int) -> str:
-    parts: list[str] = []
-    for index, field in enumerate(SORT_OPTIONS):
-        prefix = ">" if index == selected_index else " "
-        parts.append(f"{prefix}{SORT_LABELS[field]}")
-    return "Sort by: " + "  ".join(parts)
 
 
 def kill_process(pid: int) -> None:

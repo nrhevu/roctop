@@ -13,7 +13,7 @@ from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricsHistory
-from .interaction import MODE_KILL_CONFIRM, MODE_SORT_MENU, SORT_DEFAULT, ProcessViewState
+from .interaction import MODE_KILL_CONFIRM, MODE_SORT_MENU, SORT_DEFAULT, SORT_LABELS, SORT_OPTIONS, ProcessViewState
 from .models import GpuInfo, ProcessInfo, Snapshot
 
 DRACULA_GREEN = "#50fa7b"
@@ -312,12 +312,14 @@ def render_process_table(
         display_processes = process_state.sorted_processes(display_processes)
         process_state.sync(display_processes)
         title = Text(process_state.process_title(len(display_processes)), style=DRACULA_DIM)
-        caption_text = process_state.caption()
+        caption = render_process_caption(process_state)
+        if caption is None:
+            caption_text = process_state.caption()
+        else:
+            caption_text = ""
         if caption_text:
             caption_style = DRACULA_YELLOW
-            if process_state.mode == MODE_SORT_MENU:
-                caption_style = DRACULA_CYAN
-            elif process_state.mode == MODE_KILL_CONFIRM:
+            if process_state.mode == MODE_KILL_CONFIRM:
                 caption_style = DRACULA_RED
             caption = Text(caption_text, style=caption_style)
         display_processes = visible_process_window(display_processes, process_state, max_rows, command_width)
@@ -371,6 +373,22 @@ def render_process_table(
             style=f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}" if selected_pid == proc.pid else None,
         )
     return table
+
+
+def render_process_caption(process_state: ProcessViewState) -> Text | None:
+    if process_state.mode != MODE_SORT_MENU:
+        return None
+    caption = Text()
+    caption.append("Sort by: ", style=f"bold {DRACULA_CYAN}")
+    for index, field in enumerate(SORT_OPTIONS):
+        if index:
+            caption.append("   ")
+        label = SORT_LABELS[field]
+        if index == process_state.sort_menu_index:
+            caption.append(f" {label} ", style=f"bold {DRACULA_BG} on {DRACULA_SELECTION_BG}")
+        else:
+            caption.append(label, style=f"bold {DRACULA_CYAN}")
+    return caption
 
 
 def process_column_header(label: str, sort_field: str, process_state: ProcessViewState | None) -> Text:
