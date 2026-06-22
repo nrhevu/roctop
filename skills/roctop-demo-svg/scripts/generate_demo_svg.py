@@ -110,7 +110,7 @@ def build_snapshot() -> object:
             proc(4, 420104, "demo::eval_worker", "00:42:17", 74.2, 0.2, 188.4, 65.4),
             proc(5, 420105, "demo::batch_sampler", "00:39:12", 68.7, 0.2, 176.9, 61.4),
             proc(6, 420106, "demo::metrics_agent", "00:18:44", 18.5, 0.1, 96.2, 33.4),
-            proc(None, 420107, "demo::tokenizer_worker", "01:31:22", 0.4, 0.0, 0.0, 0.0),
+            proc(None, 420107, "demo::preprocess_worker", "01:31:22", 0.4, 0.0, 0.0, 0.0),
         ],
     )
 
@@ -135,7 +135,7 @@ def proc(
         "demo::eval_worker": "--suite synthetic-eval --shards 8 --report /demo/results",
         "demo::batch_sampler": "--queue synthetic-batches --prefetch 12 --workers 16",
         "demo::metrics_agent": "--target synthetic-cluster --interval 1s",
-        "demo::tokenizer_worker": "--input synthetic-corpus --queue demo-token-queue",
+        "demo::preprocess_worker": "--input synthetic-corpus --queue demo-preprocess-queue",
     }
     return ProcessInfo(
         gpu_index=gpu_index,

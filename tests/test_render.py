@@ -49,7 +49,7 @@ class RenderTests(unittest.TestCase):
                 ProcessInfo(
                     gpu_index=0,
                     pid=123,
-                    user="root",
+                    user="demo",
                     cpu_percent=12.3,
                     host_mem_percent=0.4,
                     elapsed="01:02",
@@ -110,7 +110,7 @@ class RenderTests(unittest.TestCase):
                 ProcessInfo(
                     gpu_index=0,
                     pid=123,
-                    user="root",
+                    user="demo",
                     cpu_percent=12.3,
                     host_mem_percent=0.4,
                     elapsed="01:02",
@@ -246,7 +246,7 @@ class RenderTests(unittest.TestCase):
                     ProcessInfo(
                         gpu_index=0,
                         pid=123,
-                        user="root",
+                        user="demo",
                         gpu_memory_bytes=512 * 1024 * 1024,
                         gpu_memory_percent=12.5,
                         cpu_percent=65.2,
@@ -265,7 +265,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("38;2;80;250;123", output)
 
     def test_process_command_wraps_instead_of_truncating(self) -> None:
-        long_args = "python -m sglang.launch_server --model-path /models/deepseek --tensor-parallel-size 8 --final-token"
+        long_args = "demo_server --model-path /demo/models/deepseek --tensor-parallel-size 8 --final-flag"
         console = Console(width=90, record=True, file=StringIO())
         console.print(
             render_process_table(
@@ -273,7 +273,7 @@ class RenderTests(unittest.TestCase):
                     ProcessInfo(
                         gpu_index=0,
                         pid=123,
-                        user="root",
+                        user="demo",
                         gpu_memory_bytes=512 * 1024 * 1024,
                         gpu_memory_percent=12.5,
                         cpu_percent=65.2,
@@ -287,7 +287,7 @@ class RenderTests(unittest.TestCase):
         )
         output = console.export_text()
         self.assertIn("--model-path", output)
-        self.assertIn("--final-token", output)
+        self.assertIn("--final-flag", output)
 
     def test_process_view_state_renders_title_and_selected_row(self) -> None:
         state = ProcessViewState(selected_pid=123, viewport_rows=4)
@@ -298,7 +298,7 @@ class RenderTests(unittest.TestCase):
                     ProcessInfo(
                         gpu_index=0,
                         pid=123,
-                        user="root",
+                        user="demo",
                         gpu_memory_bytes=512 * 1024 * 1024,
                         gpu_memory_percent=12.5,
                         cpu_percent=65.2,
@@ -345,8 +345,8 @@ class RenderTests(unittest.TestCase):
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
         processes = [
-            ProcessInfo(gpu_index=0, pid=123, user="root", cpu_percent=65.2, args="python train.py"),
-            ProcessInfo(gpu_index=1, pid=456, user="root", cpu_percent=12.3, args="python serve.py"),
+            ProcessInfo(gpu_index=0, pid=123, user="demo", cpu_percent=65.2, args="python train.py"),
+            ProcessInfo(gpu_index=1, pid=456, user="demo", cpu_percent=12.3, args="python serve.py"),
         ]
         state = ProcessViewState(selected_pid=123, sort_field="cpu", sort_desc=True, viewport_rows=4)
         console = Console(width=140, record=True, file=StringIO())
@@ -363,7 +363,7 @@ class RenderTests(unittest.TestCase):
 
     def test_sort_menu_highlights_selected_field_without_pointer_text(self) -> None:
         processes = [
-            ProcessInfo(gpu_index=0, pid=123, user="root", args="python train.py"),
+            ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
         ]
         state = ProcessViewState(selected_pid=123, mode="sort_menu", sort_menu_index=4, viewport_rows=4)
         console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
@@ -379,7 +379,7 @@ class RenderTests(unittest.TestCase):
 
     def test_kill_confirm_renders_option_menu_without_yn_caption(self) -> None:
         processes = [
-            ProcessInfo(gpu_index=0, pid=123, user="root", args="python train.py"),
+            ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
         ]
         state = ProcessViewState(selected_pid=123, mode=MODE_KILL_CONFIRM, viewport_rows=4)
         console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
@@ -398,8 +398,8 @@ class RenderTests(unittest.TestCase):
 
     def test_sort_menu_stays_above_process_table_when_cropped(self) -> None:
         long_args = (
-            "python3 -m sglang.launch_server --model-path /models/huggingface "
-            "--served-model-name c30final --host 0.0.0.0 --port 30000 --tp 1 --context-length 8192"
+            "demo_server --model-path /demo/models/huggingface "
+            "--served-model-name demo-model --host 0.0.0.0 --port 30000 --tp 1 --context-length 8192"
         )
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
@@ -416,7 +416,7 @@ class RenderTests(unittest.TestCase):
                 ProcessInfo(
                     gpu_index=index % 8 if index < 8 else None,
                     pid=3000 + index,
-                    user="root",
+                    user="demo",
                     cpu_percent=12.0,
                     host_mem_percent=0.1,
                     elapsed="01:02",
@@ -463,9 +463,9 @@ class RenderTests(unittest.TestCase):
 
     def test_snapshot_keeps_selected_process_visible_with_graphs(self) -> None:
         long_args = (
-            "python3 -m sglang.launch_server --model-path "
-            "/scratch/sonle5/hf_cache/models--zai-org--GLM-5.2-FP8/snapshots/31cba24fb749908a485082bdeed6eb1ac6cffc2f "
-            "--served-model-name zai-org/GLM-5.2-FP8 --host 0.0.0.0 --port 30052 "
+            "demo_server --model-path "
+            "/demo/models/glm-fp8/snapshots/demo-checkpoint-0001 "
+            "--served-model-name demo/GLM-FP8 --host 0.0.0.0 --port 30052 "
             "--tensor-parallel-size 4 --trust-remote-code --context-length 8192 "
             "--kv-cache-dtype bfloat16 --dsa-prefill-backend aiter --dsa-decode-backend aiter"
         )
@@ -473,13 +473,13 @@ class RenderTests(unittest.TestCase):
             ProcessInfo(
                 gpu_index=index % 8 if index < 5 else None,
                 pid=2000 + index,
-                user="root",
+                user="demo",
                 cpu_percent=90.0 if index < 5 else 0.4,
                 host_mem_percent=0.1,
                 gpu_memory_percent=92.5 if index < 5 else 0.0,
                 gpu_memory_bytes=1024 * 1024 * 1024 if index < 5 else 0,
                 elapsed="01:02",
-                args="sglang::scheduler" if index < 5 else "python3 -m sglang.launch_server --model-path /models/huggingface",
+                args="demo::scheduler" if index < 5 else "demo_server --model-path /demo/models/huggingface",
             )
             for index in range(12)
         ]
@@ -487,7 +487,7 @@ class RenderTests(unittest.TestCase):
             ProcessInfo(
                 gpu_index=None,
                 pid=9999,
-                user="root",
+                user="demo",
                 cpu_percent=52.8,
                 host_mem_percent=0.0,
                 elapsed="00:45",
@@ -528,14 +528,13 @@ class RenderTests(unittest.TestCase):
 
     def test_process_view_wraps_long_commands_within_visual_height(self) -> None:
         long_args = (
-            "python3 -m nexus_titan.cli direct --config /tmp/qwen3_8b_hf_config_ft_pretrain.yaml "
-            "--data-path /data --torchtitan-path /opt/NexusTitan/thirdparty/torchtitan --nnodes 2 "
+            "demo_trainer direct --config /tmp/demo_qwen_config.yaml "
+            "--data-path /demo/data --trainer-path /demo/tools/trainer --nnodes 2 "
             "--nproc-per-node 2 --rdzv-backend c10d --master-addr "
-            "q8b-js-2e6cfbb5-0632-4341-b11c-9d7270d66811-replica-0-0."
-            "q8b-js-2e6cfbb5-0632-4341-b11c-9d7270d66811.vunguyen13.svc.cluster.local"
+            "trainer-replica-0.demo-job.local"
         )
         processes = [
-            ProcessInfo(gpu_index=index % 8, pid=200 + index, user="root", args=long_args)
+            ProcessInfo(gpu_index=index % 8, pid=200 + index, user="demo", args=long_args)
             for index in range(20)
         ]
         state = ProcessViewState(selected_pid=219, viewport_rows=20)

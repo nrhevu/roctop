@@ -62,8 +62,8 @@ class CollectorTests(unittest.TestCase):
             },
             "system": {
                 "Driver version": "6.14.14",
-                "PID710898": "sglang::schedul, 1, 200145596416, 2735289460695, 88",
-                "PID721888": "python3, 0, 0, 0, 0",
+                "PID710898": "demo::schedul, 1, 200145596416, 2735289460695, 88",
+                "PID721888": "demo-worker, 0, 0, 0, 0",
             },
         }
         gpus, processes, driver = parse_rocm_smi_json(raw)
