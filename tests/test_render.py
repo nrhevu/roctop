@@ -371,7 +371,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("%MEM", plain)
         self.assertNotIn(">%MEM", plain)
         self.assertLess(plain.index("Sort by:"), plain.index("│ GPU", plain.index("Sort by:")))
-        self.assertIn("48;2;68;71;90", styled)
+        self.assertIn("38;2;40;42;54", styled)
+        self.assertIn("48;2;139;233;253", styled)
 
     def test_sort_menu_stays_above_process_table_when_cropped(self) -> None:
         long_args = (

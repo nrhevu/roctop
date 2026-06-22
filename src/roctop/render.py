@@ -29,6 +29,8 @@ DRACULA_FG = "#f8f8f2"
 DRACULA_BG = "#282a36"
 DRACULA_SELECTION_BG = "#44475a"
 DRACULA_SELECTION_FG = DRACULA_FG
+SORT_MENU_SELECTION_BG = DRACULA_CYAN
+SORT_MENU_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
 BRAILLE_DOTS_BY_SUBROW = (0x09, 0x12, 0x24, 0xC0)
 
@@ -451,7 +453,7 @@ def render_sort_menu(process_state: ProcessViewState) -> Text | None:
             menu.append("   ")
         label = SORT_LABELS[field]
         if index == process_state.sort_menu_index:
-            menu.append(f" {label} ", style=f"bold {DRACULA_BG} on {DRACULA_SELECTION_BG}")
+            menu.append(f" {label} ", style=f"bold {SORT_MENU_SELECTION_FG} on {SORT_MENU_SELECTION_BG}")
         else:
             menu.append(label, style=f"bold {DRACULA_CYAN}")
     return menu
