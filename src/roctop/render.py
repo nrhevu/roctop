@@ -41,7 +41,7 @@ def render_snapshot(
     terminal_width: int | None = None,
 ) -> Group:
     gpu_table = render_gpu_table(snapshot.gpus)
-    process_rows = estimate_process_view_rows(snapshot, history, terminal_height) if process_state else None
+    process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state) if process_state else None
     process_table = render_process_table(
         snapshot.processes,
         process_state=process_state,
@@ -67,6 +67,7 @@ def estimate_process_view_rows(
     snapshot: Snapshot,
     history: MetricsHistory | None,
     terminal_height: int | None,
+    process_state: ProcessViewState | None = None,
 ) -> int | None:
     if terminal_height is None:
         return None
@@ -74,6 +75,8 @@ def estimate_process_view_rows(
     used_rows += len(snapshot.gpus) + 4
     if history is not None:
         used_rows += 13
+    if process_state is not None and process_state.mode == MODE_SORT_MENU:
+        used_rows += 1
     visible_warnings = ui_warnings(snapshot.warnings)
     if visible_warnings:
         used_rows += min(len(visible_warnings), 6) + 4
@@ -369,12 +372,8 @@ def render_process_table(
     if process_state is not None:
         display_processes = process_state.sorted_processes(display_processes)
         process_state.sync(display_processes)
-        title = Text(process_state.process_title(len(display_processes)), style=DRACULA_DIM)
-        caption = render_process_caption(process_state)
-        if caption is None:
-            caption_text = process_state.caption()
-        else:
-            caption_text = ""
+        title = render_process_title(process_state, len(display_processes))
+        caption_text = process_state.caption()
         if caption_text:
             caption_style = DRACULA_YELLOW
             if process_state.mode == MODE_KILL_CONFIRM:
@@ -433,20 +432,29 @@ def render_process_table(
     return table
 
 
-def render_process_caption(process_state: ProcessViewState) -> Text | None:
+def render_process_title(process_state: ProcessViewState, process_count: int) -> Text:
+    title = Text(process_state.process_title(process_count), style=DRACULA_DIM)
+    sort_menu = render_sort_menu(process_state)
+    if sort_menu is not None:
+        title.append("\n")
+        title.append(sort_menu)
+    return title
+
+
+def render_sort_menu(process_state: ProcessViewState) -> Text | None:
     if process_state.mode != MODE_SORT_MENU:
         return None
-    caption = Text()
-    caption.append("Sort by: ", style=f"bold {DRACULA_CYAN}")
+    menu = Text(no_wrap=True, overflow="ellipsis")
+    menu.append("Sort by: ", style=f"bold {DRACULA_CYAN}")
     for index, field in enumerate(SORT_OPTIONS):
         if index:
-            caption.append("   ")
+            menu.append("   ")
         label = SORT_LABELS[field]
         if index == process_state.sort_menu_index:
-            caption.append(f" {label} ", style=f"bold {DRACULA_BG} on {DRACULA_SELECTION_BG}")
+            menu.append(f" {label} ", style=f"bold {DRACULA_BG} on {DRACULA_SELECTION_BG}")
         else:
-            caption.append(label, style=f"bold {DRACULA_CYAN}")
-    return caption
+            menu.append(label, style=f"bold {DRACULA_CYAN}")
+    return menu
 
 
 def process_column_header(label: str, sort_field: str, process_state: ProcessViewState | None) -> Text:

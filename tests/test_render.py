@@ -370,7 +370,56 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Sort by:", plain)
         self.assertIn("%MEM", plain)
         self.assertNotIn(">%MEM", plain)
+        self.assertLess(plain.index("Sort by:"), plain.index("│ GPU", plain.index("Sort by:")))
         self.assertIn("48;2;68;71;90", styled)
+
+    def test_sort_menu_stays_above_process_table_when_cropped(self) -> None:
+        long_args = (
+            "python3 -m sglang.launch_server --model-path /models/huggingface "
+            "--served-model-name c30final --host 0.0.0.0 --port 30000 --tp 1 --context-length 8192"
+        )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(
+                    index=index,
+                    memory_used_bytes=1024 * 1024 * 1024,
+                    memory_total_bytes=4 * 1024 * 1024 * 1024,
+                    utilization_percent=42,
+                )
+                for index in range(8)
+            ],
+            processes=[
+                ProcessInfo(
+                    gpu_index=index % 8 if index < 8 else None,
+                    pid=3000 + index,
+                    user="root",
+                    cpu_percent=12.0,
+                    host_mem_percent=0.1,
+                    elapsed="01:02",
+                    args=long_args,
+                )
+                for index in range(20)
+            ],
+        )
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=6.8,
+                avg_mem_percent=8.8,
+                avg_gpu_percent=3.8,
+                avg_gpu_mem_percent=29.8,
+            )
+        )
+        state = ProcessViewState(selected_pid=3019, mode="sort_menu", sort_menu_index=4, viewport_rows=20)
+        console = Console(width=180, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, history, state, terminal_height=45, terminal_width=180))
+        plain = console.export_text(clear=False)
+        self.assertLessEqual(len(plain.splitlines()), 45)
+        self.assertIn("Sort by:", plain)
+        self.assertLess(plain.index("Sort by:"), plain.index("│ GPU", plain.index("Sort by:")))
+        self.assertIn("3019", plain)
 
     def test_process_view_state_limits_visible_rows(self) -> None:
         processes = [
