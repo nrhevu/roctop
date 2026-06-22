@@ -98,7 +98,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
 
 def format_gpu_name(gpu: GpuInfo) -> str:
     if gpu.guid:
-        return f"{gpu.name} {gpu.guid}"
+        return f"{gpu.name}, {gpu.guid}"
     return gpu.name
 
 

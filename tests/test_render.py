@@ -57,7 +57,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("IDs (DID, GUID)", output)
         self.assertNotIn("Name", output)
         self.assertIn("AMD", output)
-        self.assertIn("AMD Instinct 29921", output)
+        self.assertIn("AMD Instinct, 29921", output)
         self.assertNotIn("GUID:", output)
         self.assertIn("AMD MI350 gfx950", output)
         self.assertIn("60°C", output)
