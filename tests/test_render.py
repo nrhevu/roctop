@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from roctop.history import MetricSample, MetricsHistory
-from roctop.interaction import ProcessViewState
+from roctop.interaction import MODE_KILL_CONFIRM, ProcessViewState
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
@@ -371,6 +371,25 @@ class RenderTests(unittest.TestCase):
         self.assertIn("%MEM", plain)
         self.assertNotIn(">%MEM", plain)
         self.assertLess(plain.index("Sort by:"), plain.index("│ GPU", plain.index("Sort by:")))
+        self.assertIn("38;2;40;42;54", styled)
+        self.assertIn("48;2;139;233;253", styled)
+
+    def test_kill_confirm_renders_option_menu_without_yn_caption(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="root", args="python train.py"),
+        ]
+        state = ProcessViewState(selected_pid=123, mode=MODE_KILL_CONFIRM, viewport_rows=4)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        self.assertIn("Kill PID 123:", plain)
+        self.assertIn("Cancel", plain)
+        self.assertIn("SIGTERM", plain)
+        self.assertIn("SIGKILL", plain)
+        self.assertNotIn("y/N", plain)
+        self.assertNotIn("Kill cancelled", plain)
+        self.assertLess(plain.index("Kill PID 123:"), plain.index("│ GPU", plain.index("Kill PID 123:")))
         self.assertIn("38;2;40;42;54", styled)
         self.assertIn("48;2;139;233;253", styled)
 

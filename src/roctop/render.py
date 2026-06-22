@@ -13,7 +13,16 @@ from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricsHistory
-from .interaction import MODE_KILL_CONFIRM, MODE_SORT_MENU, SORT_DEFAULT, SORT_LABELS, SORT_OPTIONS, ProcessViewState
+from .interaction import (
+    KILL_CONFIRM_LABELS,
+    KILL_CONFIRM_OPTIONS,
+    MODE_KILL_CONFIRM,
+    MODE_SORT_MENU,
+    SORT_DEFAULT,
+    SORT_LABELS,
+    SORT_OPTIONS,
+    ProcessViewState,
+)
 from .models import GpuInfo, ProcessInfo, Snapshot
 
 DRACULA_GREEN = "#50fa7b"
@@ -77,7 +86,7 @@ def estimate_process_view_rows(
     used_rows += len(snapshot.gpus) + 4
     if history is not None:
         used_rows += 13
-    if process_state is not None and process_state.mode == MODE_SORT_MENU:
+    if process_state is not None and process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM):
         used_rows += 1
     visible_warnings = ui_warnings(snapshot.warnings)
     if visible_warnings:
@@ -437,9 +446,11 @@ def render_process_table(
 def render_process_title(process_state: ProcessViewState, process_count: int) -> Text:
     title = Text(process_state.process_title(process_count), style=DRACULA_DIM)
     sort_menu = render_sort_menu(process_state)
-    if sort_menu is not None:
+    kill_menu = render_kill_confirm_menu(process_state)
+    menu = sort_menu or kill_menu
+    if menu is not None:
         title.append("\n")
-        title.append(sort_menu)
+        title.append(menu)
     return title
 
 
@@ -453,6 +464,25 @@ def render_sort_menu(process_state: ProcessViewState) -> Text | None:
             menu.append("   ")
         label = SORT_LABELS[field]
         if index == process_state.sort_menu_index:
+            menu.append(f" {label} ", style=f"bold {SORT_MENU_SELECTION_FG} on {SORT_MENU_SELECTION_BG}")
+        else:
+            menu.append(label, style=f"bold {DRACULA_CYAN}")
+    return menu
+
+
+def render_kill_confirm_menu(process_state: ProcessViewState) -> Text | None:
+    if process_state.mode != MODE_KILL_CONFIRM:
+        return None
+    menu = Text(no_wrap=True, overflow="ellipsis")
+    if process_state.selected_pid is None:
+        menu.append("Kill process: ", style=f"bold {DRACULA_RED}")
+    else:
+        menu.append(f"Kill PID {process_state.selected_pid}: ", style=f"bold {DRACULA_RED}")
+    for index, option in enumerate(KILL_CONFIRM_OPTIONS):
+        if index:
+            menu.append("   ")
+        label = KILL_CONFIRM_LABELS[option]
+        if index == process_state.kill_confirm_index:
             menu.append(f" {label} ", style=f"bold {SORT_MENU_SELECTION_FG} on {SORT_MENU_SELECTION_BG}")
         else:
             menu.append(label, style=f"bold {DRACULA_CYAN}")

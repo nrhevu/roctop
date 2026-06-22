@@ -26,6 +26,24 @@ MODE_NORMAL = "normal"
 MODE_SORT_MENU = "sort_menu"
 MODE_KILL_CONFIRM = "kill_confirm"
 
+KILL_CONFIRM_CANCEL = "cancel"
+KILL_CONFIRM_SIGTERM = "sigterm"
+KILL_CONFIRM_SIGKILL = "sigkill"
+KILL_CONFIRM_OPTIONS = (
+    KILL_CONFIRM_CANCEL,
+    KILL_CONFIRM_SIGTERM,
+    KILL_CONFIRM_SIGKILL,
+)
+KILL_CONFIRM_LABELS = {
+    KILL_CONFIRM_CANCEL: "Cancel",
+    KILL_CONFIRM_SIGTERM: "SIGTERM",
+    KILL_CONFIRM_SIGKILL: "SIGKILL",
+}
+KILL_CONFIRM_SIGNALS = {
+    KILL_CONFIRM_SIGTERM: signal.SIGTERM,
+    KILL_CONFIRM_SIGKILL: signal.SIGKILL,
+}
+
 SORT_DEFAULT = "default"
 SORT_OPTIONS = (
     "gpu",
@@ -74,6 +92,7 @@ class ProcessViewState:
     sort_desc: bool = True
     mode: str = MODE_NORMAL
     sort_menu_index: int = 0
+    kill_confirm_index: int = 0
     status_message: str = ""
     viewport_rows: int = 8
 
@@ -129,7 +148,7 @@ class ProcessViewState:
         self,
         key: str,
         processes: list[ProcessInfo],
-        kill_func: Callable[[int], None] = None,
+        kill_func: Callable[[int, signal.Signals], None] = None,
     ) -> KeyResult:
         kill_func = kill_func or kill_process
         self.sync(processes)
@@ -168,7 +187,8 @@ class ProcessViewState:
                 self.status_message = "No process selected"
             else:
                 self.mode = MODE_KILL_CONFIRM
-                self.status_message = f"Kill PID {selected.pid} with SIGTERM? y/N"
+                self.kill_confirm_index = 0
+                self.status_message = ""
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -176,20 +196,38 @@ class ProcessViewState:
         self,
         key: str,
         processes: list[ProcessInfo],
-        kill_func: Callable[[int], None],
+        kill_func: Callable[[int, signal.Signals], None],
     ) -> KeyResult:
-        if key not in ("y", "Y"):
-            self.mode = MODE_NORMAL
-            self.status_message = "Kill cancelled"
+        if key in ("j", KEY_DOWN, KEY_LEFT):
+            self.kill_confirm_index = max(0, self.kill_confirm_index - 1)
             return KeyResult(changed=True)
+        if key in ("k", KEY_UP, KEY_RIGHT):
+            self.kill_confirm_index = min(len(KILL_CONFIRM_OPTIONS) - 1, self.kill_confirm_index + 1)
+            return KeyResult(changed=True)
+        if key in (KEY_ESC, "q", "n", "N"):
+            self.mode = MODE_NORMAL
+            self.status_message = ""
+            return KeyResult(changed=True)
+        if key in ("y", "Y"):
+            self.kill_confirm_index = KILL_CONFIRM_OPTIONS.index(KILL_CONFIRM_SIGTERM)
+        elif key == KEY_ENTER:
+            option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
+            if option == KILL_CONFIRM_CANCEL:
+                self.mode = MODE_NORMAL
+                self.status_message = ""
+                return KeyResult(changed=True)
+        else:
+            return KeyResult()
 
+        option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
+        kill_signal = KILL_CONFIRM_SIGNALS[option]
         selected = self.selected_process(processes)
         self.mode = MODE_NORMAL
         if selected is None:
             self.status_message = "No process selected"
             return KeyResult(changed=True)
         try:
-            kill_func(selected.pid)
+            kill_func(selected.pid, kill_signal)
         except ProcessLookupError:
             self.status_message = f"PID {selected.pid} is no longer running"
         except PermissionError:
@@ -197,7 +235,7 @@ class ProcessViewState:
         except OSError as exc:
             self.status_message = f"Failed to kill PID {selected.pid}: {exc}"
         else:
-            self.status_message = f"Sent SIGTERM to PID {selected.pid}"
+            self.status_message = f"Sent {kill_signal.name} to PID {selected.pid}"
         return KeyResult(changed=True)
 
     def handle_sort_menu_key(self, key: str) -> KeyResult:
@@ -385,8 +423,8 @@ def current_sort_menu_index(sort_field: str) -> int:
         return 0
 
 
-def kill_process(pid: int) -> None:
-    os.kill(pid, signal.SIGTERM)
+def kill_process(pid: int, kill_signal: signal.Signals = signal.SIGTERM) -> None:
+    os.kill(pid, kill_signal)
 
 
 def clamp(value: int, low: int, high: int) -> int:

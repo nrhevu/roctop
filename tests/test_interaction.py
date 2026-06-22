@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import unittest
 
 from roctop.interaction import (
@@ -98,34 +99,50 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.selected_pid, 3)
         self.assertEqual(state.selected_index, 1)
 
-    def test_kill_confirm_can_cancel_or_send_sigterm(self) -> None:
+    def test_kill_confirm_can_cancel_or_send_selected_signal(self) -> None:
         processes = [proc(42)]
-        calls: list[int] = []
+        calls: list[tuple[int, signal.Signals]] = []
         state = ProcessViewState(viewport_rows=3)
         state.sync(processes)
 
-        state.handle_key("x", processes)
-        self.assertEqual(state.mode, MODE_KILL_CONFIRM)
-        state.handle_key("n", processes, kill_func=calls.append)
-        self.assertEqual(state.mode, MODE_NORMAL)
-        self.assertEqual(calls, [])
-        self.assertIn("cancelled", state.status_message)
+        def record(pid: int, kill_signal: signal.Signals) -> None:
+            calls.append((pid, kill_signal))
 
         state.handle_key("x", processes)
-        state.handle_key("y", processes, kill_func=calls.append)
-        self.assertEqual(calls, [42])
+        self.assertEqual(state.mode, MODE_KILL_CONFIRM)
+        self.assertEqual(state.kill_confirm_index, 0)
+        self.assertEqual(state.status_message, "")
+        state.handle_key(KEY_ENTER, processes, kill_func=record)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(calls, [])
+        self.assertEqual(state.status_message, "")
+
+        state.handle_key("x", processes)
+        state.handle_key(KEY_RIGHT, processes, kill_func=record)
+        self.assertEqual(state.kill_confirm_index, 1)
+        state.handle_key(KEY_ENTER, processes, kill_func=record)
+        self.assertEqual(calls, [(42, signal.SIGTERM)])
         self.assertIn("Sent SIGTERM", state.status_message)
+
+        state.handle_key("x", processes)
+        state.handle_key(KEY_RIGHT, processes, kill_func=record)
+        state.handle_key(KEY_RIGHT, processes, kill_func=record)
+        self.assertEqual(state.kill_confirm_index, 2)
+        state.handle_key(KEY_ENTER, processes, kill_func=record)
+        self.assertEqual(calls[-1], (42, signal.SIGKILL))
+        self.assertIn("Sent SIGKILL", state.status_message)
 
     def test_kill_errors_become_status_messages(self) -> None:
         processes = [proc(42)]
         state = ProcessViewState(viewport_rows=3)
         state.sync(processes)
 
-        def deny(_pid: int) -> None:
+        def deny(_pid: int, _kill_signal: signal.Signals) -> None:
             raise PermissionError
 
         state.handle_key("x", processes)
-        state.handle_key("y", processes, kill_func=deny)
+        state.handle_key(KEY_RIGHT, processes, kill_func=deny)
+        state.handle_key(KEY_ENTER, processes, kill_func=deny)
         self.assertIn("Permission denied", state.status_message)
 
     def test_elapsed_seconds_parses_ps_etime_formats(self) -> None:

@@ -17,7 +17,7 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 - **Live history graphs:** split graph panel tracks average host CPU, host memory, GPU utilization, and GPU memory usage over the recent refresh window.
 - **Process visibility:** process table shows GPU index, PID, user, GPU memory, GPU memory percent, host CPU/memory percent, elapsed runtime, and full wrapped command lines.
 - **Interactive process navigation:** move through processes with `j/k` or arrow keys, page through long lists, keep the selected process visible across refreshes, and sort by GPU, memory, CPU, PID, user, time, or command.
-- **Safe process actions:** `x` opens a kill confirmation prompt before sending SIGTERM, with status messages for cancellation, missing processes, permission errors, and other failures.
+- **Safe process actions:** `x` opens a high-contrast confirmation menu with Cancel, SIGTERM, and SIGKILL choices, plus status messages for missing processes, permission errors, and other failures.
 - **Robust data collection:** combines `rocm-smi` GPU snapshots, `amd-smi process` process memory data, and `ps` process metadata, with fallbacks when process-specific data is missing or malformed.
 - **Script-friendly modes:** `--once` renders a single terminal snapshot, `--json` prints normalized snapshot data, and `--interval` controls live refresh cadence.
 
