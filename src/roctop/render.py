@@ -39,6 +39,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("Name", overflow="fold")
     table.add_column("Temp", justify="right")
+    table.add_column("Power", justify="right")
     table.add_column("Memory-Usage", justify="right")
     table.add_column("GPU-Util", justify="right")
     table.add_column("MEM", ratio=2)
@@ -48,6 +49,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         mem_style = percent_style(gpu.memory_percent)
         util_style = percent_style(gpu.utilization_percent)
         temp = f"{gpu.temperature_c:.0f}°C" if gpu.temperature_c is not None else "N/A"
+        power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
         name = gpu.name
         if gpu.gfx_version and gpu.gfx_version not in name:
             name = f"{name} {gpu.gfx_version}"
@@ -55,6 +57,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
             str(gpu.index),
             name,
             Text(temp, style=temp_style(gpu.temperature_c)),
+            Text(power, style=power_style(gpu.power_w)),
             Text(
                 f"{format_bytes_mib(gpu.memory_used_bytes)} / {format_bytes_mib(gpu.memory_total_bytes)}",
                 style=mem_style,
@@ -143,5 +146,15 @@ def temp_style(temp_c: float | None) -> str:
     if temp_c >= 80:
         return "bold red"
     if temp_c >= 65:
+        return "yellow"
+    return "green"
+
+
+def power_style(power_w: float | None) -> str:
+    if power_w is None:
+        return "dim"
+    if power_w >= 350:
+        return "bold red"
+    if power_w >= 250:
         return "yellow"
     return "green"

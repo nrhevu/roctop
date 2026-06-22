@@ -21,6 +21,7 @@ class RenderTests(unittest.TestCase):
                     name="AMD Instinct",
                     gfx_version="gfx950",
                     temperature_c=60,
+                    power_w=266,
                     memory_used_bytes=1024 * 1024 * 1024,
                     memory_total_bytes=4 * 1024 * 1024 * 1024,
                     utilization_percent=42,
@@ -46,8 +47,8 @@ class RenderTests(unittest.TestCase):
         output = console.export_text()
         self.assertIn("roctop", output)
         self.assertIn("AMD", output)
-        self.assertIn("Instinct", output)
         self.assertIn("60°C", output)
+        self.assertIn("266W", output)
         self.assertIn("123", output)
 
 

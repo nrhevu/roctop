@@ -11,6 +11,7 @@ class GpuInfo:
     name: str = "AMD GPU"
     gfx_version: str = ""
     temperature_c: float | None = None
+    power_w: float | None = None
     memory_used_bytes: int = 0
     memory_total_bytes: int = 0
     utilization_percent: float = 0.0

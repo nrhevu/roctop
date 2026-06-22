@@ -20,6 +20,7 @@ ROCM_SMI_ARGS = [
     "--showmeminfo",
     "vram",
     "--showtemp",
+    "--showpower",
     "--showpids",
     "--showdriverversion",
     "--json",
@@ -141,6 +142,14 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
                         value.get("Temperature (Sensor junction) (C)"),
                         value.get("Temperature (Sensor edge) (C)"),
                         value.get("temperature_hotspot (C)"),
+                    )
+                ),
+                power_w=parse_optional_float(
+                    first_non_empty(
+                        value.get("Current Socket Graphics Package Power (W)"),
+                        value.get("Average Graphics Package Power (W)"),
+                        value.get("average_socket_power (W)"),
+                        value.get("current_socket_power (W)"),
                     )
                 ),
                 memory_used_bytes=parse_int(value.get("VRAM Total Used Memory (B)")),
