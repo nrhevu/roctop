@@ -142,7 +142,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("30s", output)
         self.assertLess(output.index("Avg %CPU: 37.3%"), output.index("120s"))
         self.assertLess(output.index("120s"), output.index("Avg %MEM: 77.2%"))
-        self.assertLess(output.index("Avg %GPU MEM: 54.6%"), output.index("Avg %GPU: 33.2%"))
+        self.assertLess(output.index("Avg %GPU: 33.2%"), output.index("Avg %GPU MEM: 54.6%"))
         self.assertLess(output.index("UTL"), output.index("Avg %CPU"))
         self.assertLess(output.index("Avg %CPU"), output.index("PID"))
 
@@ -180,7 +180,7 @@ class RenderTests(unittest.TestCase):
         lines = console.export_text().splitlines()
         axis_lines = [index for index, line in enumerate(lines) if "120s" in line]
         bottom_label_lines = [
-            index for index, line in enumerate(lines) if "Avg %MEM:" in line and "Avg %GPU:" in line
+            index for index, line in enumerate(lines) if "Avg %MEM:" in line and "Avg %GPU MEM:" in line
         ]
         self.assertEqual(len(axis_lines), 1)
         self.assertEqual(len(bottom_label_lines), 1)

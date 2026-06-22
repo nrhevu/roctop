@@ -211,12 +211,12 @@ def render_metrics_graphs(history: MetricsHistory) -> Table:
         ),
         MetricGraphPair(
             history=history,
-            top_metric_name="avg_gpu_mem_percent",
-            top_label="Avg %GPU MEM",
-            top_style=DRACULA_YELLOW,
-            bottom_metric_name="avg_gpu_percent",
-            bottom_label="Avg %GPU",
-            bottom_style=DRACULA_ORANGE,
+            top_metric_name="avg_gpu_percent",
+            top_label="Avg %GPU",
+            top_style=DRACULA_ORANGE,
+            bottom_metric_name="avg_gpu_mem_percent",
+            bottom_label="Avg %GPU MEM",
+            bottom_style=DRACULA_YELLOW,
         ),
     )
     return table
