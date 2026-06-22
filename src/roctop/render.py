@@ -3,7 +3,6 @@ from __future__ import annotations
 from rich import box
 from rich.console import Group
 from rich.panel import Panel
-from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
@@ -131,19 +130,27 @@ def ui_warnings(warnings: list[str]) -> list[str]:
     ]
 
 
-def progress_cell(percent: float, style: str) -> ProgressBar:
-    return ProgressBar(total=100, completed=clamp_percent(percent), width=None, style="grey23", complete_style=style)
-
-
 def bar_with_percent(percent: float, style: str, digits: int = 0) -> Table:
+    percent = clamp_percent(percent)
     grid = Table.grid(expand=True)
     grid.add_column(ratio=1)
     grid.add_column(justify="right", no_wrap=True, width=7)
     grid.add_row(
-        progress_cell(percent, style),
+        progress_text(percent, style),
         Text(percent_text(percent, digits=digits), style=style, no_wrap=True),
     )
     return grid
+
+
+def progress_text(percent: float, style: str, width: int = 48) -> Text:
+    percent = clamp_percent(percent)
+    completed = round(width * percent / 100.0)
+    text = Text(no_wrap=True, overflow="crop")
+    if completed:
+        text.append("━" * completed, style=style)
+    if completed < width:
+        text.append("━" * (width - completed), style="grey23")
+    return text
 
 
 def percent_style(percent: float | int | None) -> str:
