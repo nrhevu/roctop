@@ -245,7 +245,7 @@ class RenderTests(unittest.TestCase):
         styled = console.export_text(styles=True)
         self.assertIn("Processes  1/1  sort: default", plain)
         self.assertNotIn("j/k move", plain)
-        self.assertIn("48;2;189;147;249", styled)
+        self.assertIn("48;2;68;71;90", styled)
 
     def test_process_help_renders_in_header_with_key_labels(self) -> None:
         snapshot = Snapshot(
