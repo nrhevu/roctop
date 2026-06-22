@@ -106,14 +106,14 @@ def render_header(
     if snapshot.driver_version:
         details.append("   ROCm Driver: ", style=DRACULA_DIM)
         details.append(snapshot.driver_version, style=DRACULA_GREEN)
-    gpu_types = summarize_gpu_types(snapshot.gpus)
-    if gpu_types:
-        details.append("   Type: ", style=DRACULA_DIM)
-        details.append(gpu_types, style=DRACULA_CYAN)
-    gfx_versions = summarize_gfx_versions(snapshot.gpus)
-    if gfx_versions:
-        details.append("   GFX: ", style=DRACULA_DIM)
-        details.append(gfx_versions, style=DRACULA_CYAN)
+    gpu_models = summarize_gpu_models(snapshot.gpus)
+    if gpu_models:
+        details.append("   Model: ", style=DRACULA_DIM)
+        details.append(gpu_models, style=DRACULA_CYAN)
+    architectures = summarize_gpu_architectures(snapshot.gpus)
+    if architectures:
+        details.append("   Architecture: ", style=DRACULA_DIM)
+        details.append(architectures, style=DRACULA_CYAN)
     if process_state is not None:
         details.append("\n")
         append_process_help(details)
@@ -142,7 +142,6 @@ def append_keybinding(details: Text, key: str, action: str, leading_space: bool 
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
-    table.add_column("DID", overflow="fold")
     table.add_column("GUID", overflow="fold")
     table.add_column("Temp", justify="right")
     table.add_column("Fan", justify="right")
@@ -162,7 +161,6 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         mclk = format_clock(gpu.mclk_mhz)
         row = [
             str(gpu.index),
-            gpu.name,
             Text(gpu.guid or "N/A", style=DRACULA_FG if gpu.guid else DRACULA_DIM),
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(
@@ -183,11 +181,11 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     return table
 
 
-def summarize_gpu_types(gpus: list[GpuInfo]) -> str:
+def summarize_gpu_models(gpus: list[GpuInfo]) -> str:
     return ", ".join(unique_non_empty(gpu.gpu_type for gpu in gpus))
 
 
-def summarize_gfx_versions(gpus: list[GpuInfo]) -> str:
+def summarize_gpu_architectures(gpus: list[GpuInfo]) -> str:
     return ", ".join(unique_non_empty(gpu.gfx_version for gpu in gpus))
 
 

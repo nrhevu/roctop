@@ -12,7 +12,7 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 
 ## Features
 
-- **GPU overview:** compact table for every ROCm GPU with DID, GUID, inferred GPU type, GFX version, temperature, fan status, power draw, SCLK/MCLK clocks, VRAM usage, and utilization.
+- **GPU overview:** compact table for every ROCm GPU with GUID, standardized model, architecture, temperature, fan status, power draw, SCLK/MCLK clocks, VRAM usage, and utilization.
 - **Readable utilization bars:** memory and GPU utilization are shown as inline bars with percentage labels and threshold colors, making idle, busy, and saturated devices easy to scan.
 - **Live history graphs:** split graph panel tracks average host CPU, host memory, GPU utilization, and GPU memory usage over the recent refresh window.
 - **Process visibility:** process table shows GPU index, PID, user, GPU memory, GPU memory percent, host CPU/memory percent, elapsed runtime, and full wrapped command lines.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import random
 import sys
 from datetime import datetime, timedelta
@@ -90,7 +91,7 @@ def build_snapshot() -> object:
                 index=index,
                 name="0x75b0",
                 guid=guid_values[index],
-                gpu_type="AMD MI350",
+                gpu_type="AMD Instinct MI350X",
                 gfx_version="gfx950",
                 temperature_c=temps[index],
                 power_w=powers[index],
@@ -185,14 +186,20 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def verify_svg(path: Path) -> None:
-    text = path.read_text()
+    text = html.unescape(path.read_text()).replace("\xa0", " ")
     missing = []
-    if text.count("0x75b0") != 8:
-        missing.append("exactly 8 GPU rows")
-    for expected in ("38421", "59107", "104682", "118295"):
+    guid_values = ("38421", "59107", "62043", "71896", "84217", "93504", "104682", "118295")
+    for expected in guid_values:
         if expected not in text:
             missing.append(f"GUID {expected}")
-    for expected in ("demo::trainer_rank0", "demo::eval_worker", "demo::metrics_agent", "Sort", "%GPU-MEM"):
+    for expected in (
+        "AMD Instinct MI350X",
+        "demo::trainer_rank0",
+        "demo::eval_worker",
+        "demo::metrics_agent",
+        "Sort",
+        "%GPU-MEM",
+    ):
         if expected not in text:
             missing.append(expected)
     forbidden = [value for value in FORBIDDEN_STRINGS if value in text]

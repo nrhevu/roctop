@@ -10,6 +10,7 @@ from roctop.collectors import (
     collect_snapshot,
     load_json_from_text,
     merge_process_sources,
+    parse_amd_pci_models,
     parse_amd_smi_process_json,
     parse_rocm_smi_json,
     run_command,
@@ -71,7 +72,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(gpus), 1)
         self.assertEqual(gpus[0].index, 0)
         self.assertEqual(gpus[0].guid, "29921")
-        self.assertEqual(gpus[0].gpu_type, "AMD MI350")
+        self.assertEqual(gpus[0].gpu_type, "AMD Instinct MI350X")
         self.assertEqual(gpus[0].utilization_percent, 99)
         self.assertEqual(gpus[0].fan_percent, 42.0)
         self.assertEqual(gpus[0].fan_rpm, 3200)
@@ -83,6 +84,77 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(processes[0].pid, 710898)
         self.assertEqual(processes[1].pid, 721888)
         self.assertEqual(processes[1].gpu_memory_bytes, 0)
+
+    def test_parse_rocm_smi_json_normalizes_reported_model_name(self) -> None:
+        gpus, _, _ = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "Card Series": "AMD MI350X",
+                    "GFX Version": "gfx950",
+                },
+                "card1": {
+                    "Card Series": "AMD Instinct\u2122 MI355X",
+                },
+                "card2": {
+                    "Card Series": "Navi 31 [Radeon Pro W7900]",
+                },
+            }
+        )
+
+        self.assertEqual(gpus[0].gpu_type, "AMD Instinct MI350X")
+        self.assertEqual(gpus[1].gpu_type, "AMD Instinct MI355X")
+        self.assertEqual(gpus[2].gpu_type, "AMD Radeon PRO W7900")
+
+    def test_parse_rocm_smi_json_maps_instinct_device_ids(self) -> None:
+        gpus, _, _ = parse_rocm_smi_json(
+            {
+                "card0": {"Card Model": "0x738c"},
+                "card1": {"Card Model": "7408"},
+                "card2": {"Card Model": "0x740c"},
+                "card3": {"Card Model": "0x740f"},
+                "card4": {"Card Model": "0x74a0"},
+                "card5": {"Card Model": "0x74a1"},
+            }
+        )
+
+        self.assertEqual(
+            [gpu.gpu_type for gpu in gpus],
+            [
+                "AMD Instinct MI100",
+                "AMD Instinct MI250X",
+                "AMD Instinct MI200 Series",
+                "AMD Instinct MI210",
+                "AMD Instinct MI300A",
+                "AMD Instinct MI300X",
+            ],
+        )
+
+    def test_parse_amd_pci_models_normalizes_product_names(self) -> None:
+        models = parse_amd_pci_models(
+            """
+1002  Advanced Micro Devices, Inc. [AMD/ATI]
+\t7448  Navi 31 [Radeon Pro W7900]
+\t74a1  Aqua Vanjaram [Instinct MI300X]
+\t\t1002 0e3a  Subdevice entry
+10de  NVIDIA Corporation
+\t2684  AD102 [GeForce RTX 4090]
+"""
+        )
+
+        self.assertEqual(models["0x7448"], "AMD Radeon PRO W7900")
+        self.assertEqual(models["0x74a1"], "AMD Instinct MI300X")
+        self.assertNotIn("0x2684", models)
+
+    def test_parse_rocm_smi_json_uses_architecture_series_fallback(self) -> None:
+        gpus, _, _ = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "GFX Version": "gfx950",
+                }
+            }
+        )
+
+        self.assertEqual(gpus[0].gpu_type, "AMD Instinct MI350 Series")
 
     def test_parse_amd_smi_process_json_filters_zero_memory(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(

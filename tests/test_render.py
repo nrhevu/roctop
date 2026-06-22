@@ -33,7 +33,7 @@ class RenderTests(unittest.TestCase):
                     index=0,
                     name="AMD Instinct",
                     guid="29921",
-                    gpu_type="AMD MI350",
+                    gpu_type="AMD Instinct MI350X",
                     gfx_version="gfx950",
                     temperature_c=60,
                     fan_percent=42,
@@ -67,18 +67,19 @@ class RenderTests(unittest.TestCase):
         console.print(render_snapshot(snapshot))
         output = console.export_text()
         self.assertIn("roctop", output)
-        self.assertIn("DID", output)
         self.assertIn("GUID", output)
+        self.assertNotIn("DID", output)
         self.assertNotIn("DIDs", output)
         self.assertNotIn("GUIDs", output)
         self.assertNotIn("IDs (DID, GUID)", output)
         self.assertNotIn("Name", output)
         self.assertIn("AMD", output)
-        self.assertIn("AMD Instinct", output)
         self.assertIn("29921", output)
         self.assertNotIn("GUID:", output)
-        self.assertIn("Type: AMD MI350", output)
-        self.assertIn("GFX: gfx950", output)
+        self.assertIn("Model: AMD Instinct MI350X", output)
+        self.assertIn("Architecture: gfx950", output)
+        self.assertNotIn("Type:", output)
+        self.assertNotIn("GFX:", output)
         self.assertNotIn("│ Type", output)
         self.assertIn("60°C", output)
         self.assertIn("42%", output)

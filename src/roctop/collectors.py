@@ -7,6 +7,8 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from .formatting import clamp_percent, parse_int, parse_number
@@ -30,11 +32,53 @@ ROCM_SMI_ARGS = [
 
 AMD_SMI_PROCESS_ARGS = ["amd-smi", "process", "-G", "--json"]
 ROCM_SMI_TIMEOUT_SECONDS = 15.0
-GPU_TYPE_BY_DEVICE_ID = {
-    "0x75b0": "AMD MI350",
+AMD_PCI_VENDOR_ID = "1002"
+PCI_IDS_PATHS = (
+    Path("/usr/share/misc/pci.ids"),
+    Path("/usr/share/hwdata/pci.ids"),
+)
+GPU_MODEL_BY_DEVICE_ID = {
+    "0x738c": "AMD Instinct MI100",
+    "0x738e": "AMD Instinct MI100",
+    "0x7408": "AMD Instinct MI250X",
+    "0x740c": "AMD Instinct MI200 Series",
+    "0x740f": "AMD Instinct MI210",
+    "0x74a0": "AMD Instinct MI300A",
+    "0x74a1": "AMD Instinct MI300X",
+    "0x75b0": "AMD Instinct MI350X",
 }
-GPU_TYPE_BY_GFX_VERSION = {
-    "gfx950": "AMD MI350",
+GPU_MODEL_BY_ARCHITECTURE = {
+    "gfx908": "AMD Instinct MI100",
+    "gfx90a": "AMD Instinct MI200 Series",
+    "gfx940": "AMD Instinct MI300 Series",
+    "gfx941": "AMD Instinct MI300 Series",
+    "gfx942": "AMD Instinct MI300 Series",
+    "gfx950": "AMD Instinct MI350 Series",
+}
+INSTINCT_MODEL_BY_TOKEN = {
+    "mi6": "AMD Radeon Instinct MI6",
+    "mi8": "AMD Radeon Instinct MI8",
+    "mi25": "AMD Radeon Instinct MI25",
+    "mi50": "AMD Radeon Instinct MI50",
+    "mi60": "AMD Radeon Instinct MI60",
+    "mi100": "AMD Instinct MI100",
+    "mi210": "AMD Instinct MI210",
+    "mi250": "AMD Instinct MI250",
+    "mi250x": "AMD Instinct MI250X",
+    "mi300a": "AMD Instinct MI300A",
+    "mi300x": "AMD Instinct MI300X",
+    "mi325x": "AMD Instinct MI325X",
+    "mi350p": "AMD Instinct MI350P",
+    "mi350x": "AMD Instinct MI350X",
+    "mi355x": "AMD Instinct MI355X",
+}
+INSTINCT_SERIES_BY_PREFIX = {
+    "210": "AMD Instinct MI200 Series",
+    "250": "AMD Instinct MI200 Series",
+    "300": "AMD Instinct MI300 Series",
+    "325": "AMD Instinct MI300 Series",
+    "350": "AMD Instinct MI350 Series",
+    "355": "AMD Instinct MI350 Series",
 }
 
 
@@ -160,7 +204,7 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
                 index=index,
                 name=name,
                 guid=first_non_empty(value.get("GUID")),
-                gpu_type=infer_gpu_type(value),
+                gpu_type=read_gpu_model(value),
                 gfx_version=gfx_version,
                 temperature_c=parse_optional_float(
                     first_non_empty(
@@ -386,8 +430,8 @@ def first_non_empty(*values: Any) -> str:
     return ""
 
 
-def infer_gpu_type(data: dict[str, Any]) -> str:
-    product_name = compact_gpu_type(
+def read_gpu_model(data: dict[str, Any]) -> str:
+    reported_model = normalize_gpu_model(
         first_non_empty(
             data.get("Card Series"),
             data.get("Card SKU"),
@@ -395,26 +439,119 @@ def infer_gpu_type(data: dict[str, Any]) -> str:
             data.get("Product Name"),
         )
     )
-    if product_name:
-        return product_name
+    if reported_model:
+        return reported_model
 
-    device_id = first_non_empty(data.get("Card Model"), data.get("Device ID")).lower()
-    if device_id in GPU_TYPE_BY_DEVICE_ID:
-        return GPU_TYPE_BY_DEVICE_ID[device_id]
+    device_id = normalize_device_id(first_non_empty(data.get("Card Model"), data.get("Device ID")))
+    if device_id:
+        mapped_model = GPU_MODEL_BY_DEVICE_ID.get(device_id)
+        if mapped_model:
+            return mapped_model
 
-    gfx_version = str(data.get("GFX Version", "") or "").strip().lower()
-    return GPU_TYPE_BY_GFX_VERSION.get(gfx_version, "")
+        pci_model = load_amd_pci_models().get(device_id)
+        if pci_model:
+            return pci_model
+
+        device_model = normalize_gpu_model(device_id)
+        if device_model:
+            return device_model
+
+    architecture = str(data.get("GFX Version", "") or "").strip().lower()
+    mapped_architecture_model = GPU_MODEL_BY_ARCHITECTURE.get(architecture)
+    if mapped_architecture_model:
+        return mapped_architecture_model
+
+    return device_id
 
 
-def compact_gpu_type(value: Any) -> str:
+def normalize_gpu_model(value: Any) -> str:
     text = first_non_empty(value)
-    if not text:
+    if not text or re.fullmatch(r"0x[0-9a-f]+", text, flags=re.IGNORECASE):
         return ""
-    match = re.search(r"\bMI\s*([0-9]{3,4}[A-Z]?)\b", text, flags=re.IGNORECASE)
+    standard_instinct_model = normalize_instinct_model(text)
+    if standard_instinct_model:
+        return standard_instinct_model
+
+    bracketed_name = extract_bracketed_product_name(text)
+    if bracketed_name:
+        standard_instinct_model = normalize_instinct_model(bracketed_name)
+        if standard_instinct_model:
+            return standard_instinct_model
+        text = bracketed_name
+
+    if "radeon" in text.lower():
+        return normalize_radeon_model(text)
+    return text
+
+
+def normalize_device_id(value: Any) -> str:
+    text = first_non_empty(value).lower()
+    match = re.fullmatch(r"(?:0x)?([0-9a-f]{4})", text)
     if match:
-        return f"AMD MI{match.group(1).upper()}"
-    if re.fullmatch(r"0x[0-9a-f]+", text, flags=re.IGNORECASE):
+        return f"0x{match.group(1)}"
+    return text
+
+
+@lru_cache(maxsize=1)
+def load_amd_pci_models() -> dict[str, str]:
+    for path in PCI_IDS_PATHS:
+        try:
+            return parse_amd_pci_models(path.read_text(errors="ignore"))
+        except OSError:
+            continue
+    return {}
+
+
+def parse_amd_pci_models(text: str) -> dict[str, str]:
+    models: dict[str, str] = {}
+    in_amd_vendor = False
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith("\t"):
+            vendor_id = line.split(None, 1)[0].lower()
+            in_amd_vendor = vendor_id == AMD_PCI_VENDOR_ID
+            continue
+        if not in_amd_vendor or line.startswith("\t\t"):
+            continue
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2 or not re.fullmatch(r"[0-9a-fA-F]{4}", parts[0]):
+            continue
+        model = normalize_gpu_model(parts[1])
+        if model:
+            models[f"0x{parts[0].lower()}"] = model
+    return models
+
+
+def normalize_instinct_model(value: str) -> str:
+    tokens = {
+        f"mi{match.group(1).lower()}"
+        for match in re.finditer(r"\bMI\s*([0-9]{1,4}[A-Z]?)\b", value, flags=re.IGNORECASE)
+    }
+    known_tokens = sorted(tokens & INSTINCT_MODEL_BY_TOKEN.keys())
+    if not known_tokens:
         return ""
+    if len(known_tokens) == 1:
+        return INSTINCT_MODEL_BY_TOKEN[known_tokens[0]]
+
+    prefixes = {re.match(r"mi([0-9]+)", token).group(1) for token in known_tokens}
+    series_names = {INSTINCT_SERIES_BY_PREFIX[prefix] for prefix in prefixes if prefix in INSTINCT_SERIES_BY_PREFIX}
+    if len(series_names) == 1:
+        return series_names.pop()
+    return ", ".join(INSTINCT_MODEL_BY_TOKEN[token] for token in known_tokens)
+
+
+def extract_bracketed_product_name(value: str) -> str:
+    match = re.search(r"\[([^\]]+)\]", value)
+    return match.group(1).strip() if match else ""
+
+
+def normalize_radeon_model(value: str) -> str:
+    text = value.strip()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\bRadeon Pro\b", "Radeon PRO", text, flags=re.IGNORECASE)
+    if not text.lower().startswith("amd "):
+        text = f"AMD {text}"
     return text
 
 
