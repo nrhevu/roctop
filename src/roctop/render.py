@@ -34,11 +34,13 @@ def render_header(snapshot: Snapshot) -> Panel:
 
 
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:
+    has_fan = any(gpu.fan_percent is not None or gpu.fan_rpm is not None for gpu in gpus)
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("Name", overflow="fold")
     table.add_column("Temp", justify="right")
-    table.add_column("Fan", justify="right")
+    if has_fan:
+        table.add_column("Fan", justify="right")
     table.add_column("Power", justify="right")
     table.add_column("SCLK", justify="right")
     table.add_column("MCLK", justify="right")
@@ -50,18 +52,16 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         mem_style = percent_style(gpu.memory_percent)
         util_style = percent_style(gpu.utilization_percent)
         temp = f"{gpu.temperature_c:.0f}°C" if gpu.temperature_c is not None else "N/A"
-        fan = format_fan(gpu.fan_percent, gpu.fan_rpm)
         power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
         sclk = format_clock(gpu.sclk_mhz)
         mclk = format_clock(gpu.mclk_mhz)
         name = gpu.name
         if gpu.gfx_version and gpu.gfx_version not in name:
             name = f"{name} {gpu.gfx_version}"
-        table.add_row(
+        row = [
             str(gpu.index),
             name,
             Text(temp, style=temp_style(gpu.temperature_c)),
-            Text(fan, style=fan_style(gpu.fan_percent, gpu.fan_rpm)),
             Text(power, style=power_style(gpu.power_w)),
             Text(sclk, style=clock_style(gpu.sclk_mhz)),
             Text(mclk, style=clock_style(gpu.mclk_mhz)),
@@ -71,7 +71,10 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
             ),
             bar_with_percent(gpu.memory_percent, mem_style, digits=1),
             bar_with_percent(gpu.utilization_percent, util_style),
-        )
+        ]
+        if has_fan:
+            row.insert(3, Text(format_fan(gpu.fan_percent, gpu.fan_rpm), style=fan_style(gpu.fan_percent, gpu.fan_rpm)))
+        table.add_row(*row)
     return table
 
 

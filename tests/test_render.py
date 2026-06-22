@@ -60,6 +60,26 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
 
+    def test_fan_column_hidden_when_unsupported(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(
+                    index=0,
+                    name="AMD Instinct",
+                    temperature_c=60,
+                    power_w=266,
+                    memory_used_bytes=1024 * 1024 * 1024,
+                    memory_total_bytes=4 * 1024 * 1024 * 1024,
+                    utilization_percent=42,
+                )
+            ],
+        )
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot))
+        output = console.export_text()
+        self.assertNotIn("Fan", output)
+
     def test_high_util_bar_uses_red_style(self) -> None:
         console = Console(width=80, force_terminal=True, color_system="standard", record=True, file=StringIO())
         console.print(bar_with_percent(100, "bold red"))
