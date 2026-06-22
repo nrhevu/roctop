@@ -12,11 +12,14 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 
 ## Features
 
-- GPU table with DID/GUID, temperature, fan, power, SCLK/MCLK, VRAM usage, and utilization bars.
-- Live graph panel for average host CPU, host memory, GPU utilization, and GPU memory usage.
-- Process table with GPU memory, host CPU/memory, elapsed time, full wrapped commands, and a movable cursor.
-- Interactive process controls for scrolling, sorting, and SIGTERM kill confirmation.
-- `--once` and `--json` modes for logs, scripts, and quick snapshots.
+- **GPU overview:** compact table for every ROCm GPU with DID, GUID, inferred GPU type, GFX version, temperature, fan status, power draw, SCLK/MCLK clocks, VRAM usage, and utilization.
+- **Readable utilization bars:** memory and GPU utilization are shown as inline bars with percentage labels and threshold colors, making idle, busy, and saturated devices easy to scan.
+- **Live history graphs:** split graph panel tracks average host CPU, host memory, GPU utilization, and GPU memory usage over the recent refresh window.
+- **Process visibility:** process table shows GPU index, PID, user, GPU memory, GPU memory percent, host CPU/memory percent, elapsed runtime, and full wrapped command lines.
+- **Interactive process navigation:** move through processes with `j/k` or arrow keys, page through long lists, keep the selected process visible across refreshes, and sort by GPU, memory, CPU, PID, user, time, or command.
+- **Safe process actions:** `x` opens a kill confirmation prompt before sending SIGTERM, with status messages for cancellation, missing processes, permission errors, and other failures.
+- **Robust data collection:** combines `rocm-smi` GPU snapshots, `amd-smi process` process memory data, and `ps` process metadata, with fallbacks when process-specific data is missing or malformed.
+- **Script-friendly modes:** `--once` renders a single terminal snapshot, `--json` prints normalized snapshot data, and `--interval` controls live refresh cadence.
 
 ## Install
 
