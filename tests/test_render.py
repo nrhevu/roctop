@@ -7,6 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from roctop.history import MetricSample, MetricsHistory
+from roctop.interaction import ProcessViewState
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
@@ -217,6 +218,73 @@ class RenderTests(unittest.TestCase):
         output = console.export_text()
         self.assertIn("--model-path", output)
         self.assertIn("--final-token", output)
+
+    def test_process_view_state_renders_title_and_selected_row(self) -> None:
+        state = ProcessViewState(selected_pid=123, viewport_rows=4)
+        console = Console(width=120, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                [
+                    ProcessInfo(
+                        gpu_index=0,
+                        pid=123,
+                        user="root",
+                        gpu_memory_bytes=512 * 1024 * 1024,
+                        gpu_memory_percent=12.5,
+                        cpu_percent=65.2,
+                        host_mem_percent=7.4,
+                        elapsed="01:02",
+                        args="python train.py",
+                    )
+                ],
+                process_state=state,
+                max_rows=4,
+            )
+        )
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        self.assertIn("Processes  1/1  sort: default", plain)
+        self.assertNotIn("j/k move", plain)
+        self.assertIn("48;2;189;147;249", styled)
+
+    def test_process_help_renders_in_header_with_key_labels(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=123, args="python train.py"),
+                ProcessInfo(gpu_index=1, pid=456, args="python serve.py"),
+            ],
+        )
+        state = ProcessViewState(selected_pid=456, viewport_rows=4)
+        console = Console(width=180, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=40))
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        self.assertIn("Processes: 2/2", plain)
+        self.assertIn("Sort: default", plain)
+        self.assertIn("j/k: move", plain)
+        self.assertIn("PgUp/PgDn: scroll", plain)
+        self.assertIn("s: sort", plain)
+        self.assertIn("x: kill", plain)
+        self.assertIn("q: quit", plain)
+        self.assertIn("38;2;255;184;108", styled)
+
+    def test_process_view_state_limits_visible_rows(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=101, args="cmd-101"),
+            ProcessInfo(gpu_index=0, pid=102, args="cmd-102"),
+            ProcessInfo(gpu_index=0, pid=103, args="cmd-103"),
+            ProcessInfo(gpu_index=0, pid=104, args="cmd-104"),
+            ProcessInfo(gpu_index=0, pid=105, args="cmd-105"),
+        ]
+        state = ProcessViewState(selected_pid=105, viewport_rows=2)
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=2))
+        output = console.export_text()
+        self.assertNotIn("cmd-101", output)
+        self.assertNotIn("cmd-102", output)
+        self.assertIn("cmd-104", output)
+        self.assertIn("cmd-105", output)
 
 
 if __name__ == "__main__":

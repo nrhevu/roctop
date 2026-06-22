@@ -10,6 +10,7 @@ from rich.live import Live
 from . import __version__
 from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot
 from .history import MetricsHistory
+from .interaction import ProcessViewState, TerminalKeyboard
 from .render import render_snapshot
 
 
@@ -57,18 +58,55 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_live(console: Console, interval: float) -> int:
     history = MetricsHistory(max_samples=120)
+    process_state = ProcessViewState()
     snapshot = collect_snapshot_retry(interval)
     history.add_snapshot(snapshot)
-    with Live(render_snapshot(snapshot, history), console=console, screen=True, auto_refresh=False) as live:
+    with (
+        TerminalKeyboard() as keyboard,
+        Live(
+            render_snapshot(snapshot, history, process_state, console.size.height),
+            console=console,
+            screen=True,
+            auto_refresh=False,
+        ) as live,
+    ):
         while True:
+            if poll_input_until_refresh(live, keyboard, snapshot, history, process_state, console, interval):
+                return 0
             try:
                 snapshot = collect_snapshot()
             except CommandTimeout:
-                time.sleep(interval)
                 continue
             history.add_snapshot(snapshot)
-            live.update(render_snapshot(snapshot, history), refresh=True)
-            time.sleep(interval)
+            live.update(render_snapshot(snapshot, history, process_state, console.size.height), refresh=True)
+
+
+def poll_input_until_refresh(
+    live: Live,
+    keyboard: TerminalKeyboard,
+    snapshot,
+    history: MetricsHistory,
+    process_state: ProcessViewState,
+    console: Console,
+    interval: float,
+) -> bool:
+    deadline = time.monotonic() + interval
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        keys = keyboard.read_keys(timeout=min(0.05, remaining))
+        if not keys:
+            continue
+        quit_requested = False
+        for key in keys:
+            processes = process_state.sorted_processes(snapshot.processes)
+            process_state.sync(processes)
+            result = process_state.handle_key(key, processes)
+            quit_requested = quit_requested or result.quit
+        live.update(render_snapshot(snapshot, history, process_state, console.size.height), refresh=True)
+        if quit_requested:
+            return True
 
 
 def collect_snapshot_retry(interval: float):

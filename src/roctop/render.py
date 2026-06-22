@@ -12,25 +12,40 @@ from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricsHistory
+from .interaction import MODE_KILL_CONFIRM, MODE_SORT_MENU, ProcessViewState
 from .models import GpuInfo, ProcessInfo, Snapshot
 
 DRACULA_GREEN = "#50fa7b"
 DRACULA_YELLOW = "#f1fa8c"
 DRACULA_RED = "#ff5555"
 DRACULA_CYAN = "#8be9fd"
+DRACULA_PURPLE = "#bd93f9"
 DRACULA_PINK = "#ff79c6"
 DRACULA_ORANGE = "#ffb86c"
 DRACULA_TRACK = "#3a3a3a"
 DRACULA_DIM = "#6272a4"
 DRACULA_FG = "#f8f8f2"
+DRACULA_BG = "#282a36"
+DRACULA_SELECTION_BG = DRACULA_PURPLE
+DRACULA_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
 BRAILLE_DOTS_BY_SUBROW = (0x09, 0x12, 0x24, 0xC0)
 
 
-def render_snapshot(snapshot: Snapshot, history: MetricsHistory | None = None) -> Group:
-    header = render_header(snapshot)
+def render_snapshot(
+    snapshot: Snapshot,
+    history: MetricsHistory | None = None,
+    process_state: ProcessViewState | None = None,
+    terminal_height: int | None = None,
+) -> Group:
     gpu_table = render_gpu_table(snapshot.gpus)
-    process_table = render_process_table(snapshot.processes)
+    process_rows = estimate_process_view_rows(snapshot, history, terminal_height) if process_state else None
+    process_table = render_process_table(snapshot.processes, process_state=process_state, max_rows=process_rows)
+    header = render_header(
+        snapshot,
+        process_state=process_state,
+        process_count=len(snapshot.processes),
+    )
     parts = [header, gpu_table]
     if history is not None:
         parts.append(render_metrics_graphs(history))
@@ -41,7 +56,28 @@ def render_snapshot(snapshot: Snapshot, history: MetricsHistory | None = None) -
     return Group(*parts)
 
 
-def render_header(snapshot: Snapshot) -> Panel:
+def estimate_process_view_rows(
+    snapshot: Snapshot,
+    history: MetricsHistory | None,
+    terminal_height: int | None,
+) -> int | None:
+    if terminal_height is None:
+        return None
+    used_rows = 3
+    used_rows += len(snapshot.gpus) + 4
+    if history is not None:
+        used_rows += 12
+    visible_warnings = ui_warnings(snapshot.warnings)
+    if visible_warnings:
+        used_rows += min(len(visible_warnings), 6) + 4
+    return max(1, terminal_height - used_rows - 4)
+
+
+def render_header(
+    snapshot: Snapshot,
+    process_state: ProcessViewState | None = None,
+    process_count: int = 0,
+) -> Panel:
     title = Text("roctop", style=f"bold {DRACULA_CYAN}")
     timestamp = snapshot.timestamp.strftime("%a %b %d %H:%M:%S %Y")
     details = Text()
@@ -57,8 +93,33 @@ def render_header(snapshot: Snapshot) -> Panel:
     if gfx_versions:
         details.append("   GFX: ", style=DRACULA_DIM)
         details.append(gfx_versions, style=DRACULA_CYAN)
-    details.append("   Press Ctrl-C to quit", style=DRACULA_DIM)
+    if process_state is not None:
+        details.append("   ")
+        append_process_help(details, process_state, process_count)
+    else:
+        details.append("   Press Ctrl-C to quit", style=DRACULA_DIM)
     return Panel(details, title=title, border_style=DRACULA_DIM, box=box.SQUARE)
+
+
+def append_process_help(details: Text, process_state: ProcessViewState, process_count: int) -> None:
+    details.append("Processes: ", style=DRACULA_DIM)
+    if process_count:
+        details.append(f"{process_state.selected_index + 1}/{process_count}", style=DRACULA_PURPLE)
+    else:
+        details.append("0/0", style=DRACULA_DIM)
+    details.append("   Sort: ", style=DRACULA_DIM)
+    details.append(process_state.sort_label(), style=DRACULA_CYAN)
+    append_keybinding(details, "j/k", "move")
+    append_keybinding(details, "PgUp/PgDn", "scroll")
+    append_keybinding(details, "s", "sort")
+    append_keybinding(details, "x", "kill")
+    append_keybinding(details, "q", "quit")
+
+
+def append_keybinding(details: Text, key: str, action: str) -> None:
+    details.append("   ")
+    details.append(f"{key}: ", style=f"bold {DRACULA_ORANGE}")
+    details.append(action, style=DRACULA_DIM)
 
 
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:
@@ -234,8 +295,38 @@ def graph_filled_rows(value: float | None, height: int) -> int:
     return max(1, min(height, math.ceil(percent / 100.0 * height)))
 
 
-def render_process_table(processes: list[ProcessInfo]) -> Table:
-    table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
+def render_process_table(
+    processes: list[ProcessInfo],
+    process_state: ProcessViewState | None = None,
+    max_rows: int | None = None,
+) -> Table:
+    display_processes = list(processes)
+    title = None
+    caption = None
+    if process_state is not None:
+        display_processes = process_state.sorted_processes(display_processes)
+        process_state.sync(display_processes, max_rows)
+        title = Text(process_state.process_title(len(display_processes)), style=DRACULA_DIM)
+        caption_text = process_state.caption()
+        if caption_text:
+            caption_style = DRACULA_YELLOW
+            if process_state.mode == MODE_SORT_MENU:
+                caption_style = DRACULA_CYAN
+            elif process_state.mode == MODE_KILL_CONFIRM:
+                caption_style = DRACULA_RED
+            caption = Text(caption_text, style=caption_style)
+        display_processes = process_state.visible_processes(display_processes)
+
+    table = Table(
+        box=box.SQUARE,
+        expand=True,
+        show_lines=False,
+        padding=(0, 1),
+        title=title,
+        title_justify="left",
+        caption=caption,
+        caption_justify="left",
+    )
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("PID", justify="right")
     table.add_column("USER")
@@ -246,11 +337,12 @@ def render_process_table(processes: list[ProcessInfo]) -> Table:
     table.add_column("TIME", justify="right")
     table.add_column("COMMAND", overflow="fold", ratio=4)
 
-    if not processes:
+    if not display_processes:
         table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
         return table
 
-    for proc in processes:
+    selected_pid = process_state.selected_pid if process_state is not None else None
+    for proc in display_processes:
         gpu = "-" if proc.gpu_index is None else str(proc.gpu_index)
         command = proc.args or proc.command or proc.name or "N/A"
         gpu_mem_style = percent_style(proc.gpu_memory_percent)
@@ -264,6 +356,7 @@ def render_process_table(processes: list[ProcessInfo]) -> Table:
             metric_text(proc.host_mem_percent, digits=1),
             proc.elapsed or "-",
             command,
+            style=f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}" if selected_pid == proc.pid else None,
         )
     return table
 

@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import unittest
+
+from roctop.interaction import (
+    KEY_DOWN,
+    KEY_ENTER,
+    KEY_PAGE_DOWN,
+    KEY_PAGE_UP,
+    KEY_UP,
+    MODE_KILL_CONFIRM,
+    MODE_NORMAL,
+    MODE_SORT_MENU,
+    ProcessViewState,
+    elapsed_seconds,
+    parse_keys,
+)
+from roctop.models import ProcessInfo
+
+
+def proc(pid: int, **kwargs) -> ProcessInfo:
+    return ProcessInfo(gpu_index=kwargs.pop("gpu_index", 0), pid=pid, **kwargs)
+
+
+class InteractionTests(unittest.TestCase):
+    def test_parse_keys_maps_arrows_pages_enter_and_escape(self) -> None:
+        self.assertEqual(
+            parse_keys(b"j\x1b[A\x1b[B\x1b[5~\x1b[6~\r\x1b"),
+            ["j", KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_ENTER, "esc"],
+        )
+
+    def test_cursor_movement_and_page_keys_clamp(self) -> None:
+        processes = [proc(pid) for pid in range(100, 106)]
+        state = ProcessViewState(viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("j", processes)
+        self.assertEqual(state.selected_pid, 101)
+        state.handle_key(KEY_DOWN, processes)
+        self.assertEqual(state.selected_pid, 102)
+        state.handle_key(KEY_PAGE_DOWN, processes)
+        self.assertEqual(state.selected_pid, 105)
+        self.assertEqual(state.scroll_offset, 3)
+        state.handle_key("k", processes)
+        self.assertEqual(state.selected_pid, 104)
+        state.handle_key(KEY_PAGE_UP, processes)
+        self.assertEqual(state.selected_pid, 101)
+        state.handle_key(KEY_UP, processes)
+        self.assertEqual(state.selected_pid, 100)
+
+    def test_sort_menu_applies_field_and_toggles_direction(self) -> None:
+        processes = [
+            proc(1, cpu_percent=1.0),
+            proc(2, cpu_percent=90.0),
+            proc(3, cpu_percent=30.0),
+        ]
+        state = ProcessViewState(viewport_rows=3)
+        state.handle_key("s", processes)
+        self.assertEqual(state.mode, MODE_SORT_MENU)
+        for _ in range(3):
+            state.handle_key("j", processes)
+        state.handle_key(KEY_ENTER, processes)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.sort_field, "cpu")
+        self.assertTrue(state.sort_desc)
+        self.assertEqual([row.pid for row in state.sorted_processes(processes)], [2, 3, 1])
+
+        state.handle_key("s", processes)
+        state.handle_key(KEY_ENTER, processes)
+        self.assertFalse(state.sort_desc)
+        self.assertEqual([row.pid for row in state.sorted_processes(processes)], [1, 3, 2])
+
+    def test_cursor_tracks_selected_pid_after_sort_refresh(self) -> None:
+        processes = [
+            proc(1, cpu_percent=1.0),
+            proc(2, cpu_percent=90.0),
+            proc(3, cpu_percent=30.0),
+        ]
+        state = ProcessViewState(selected_pid=3, sort_field="cpu", sort_desc=True, viewport_rows=2)
+        sorted_processes = state.sorted_processes(processes)
+        state.sync(sorted_processes)
+        self.assertEqual(state.selected_pid, 3)
+        self.assertEqual(state.selected_index, 1)
+
+    def test_kill_confirm_can_cancel_or_send_sigterm(self) -> None:
+        processes = [proc(42)]
+        calls: list[int] = []
+        state = ProcessViewState(viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("x", processes)
+        self.assertEqual(state.mode, MODE_KILL_CONFIRM)
+        state.handle_key("n", processes, kill_func=calls.append)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(calls, [])
+        self.assertIn("cancelled", state.status_message)
+
+        state.handle_key("x", processes)
+        state.handle_key("y", processes, kill_func=calls.append)
+        self.assertEqual(calls, [42])
+        self.assertIn("Sent SIGTERM", state.status_message)
+
+    def test_kill_errors_become_status_messages(self) -> None:
+        processes = [proc(42)]
+        state = ProcessViewState(viewport_rows=3)
+        state.sync(processes)
+
+        def deny(_pid: int) -> None:
+            raise PermissionError
+
+        state.handle_key("x", processes)
+        state.handle_key("y", processes, kill_func=deny)
+        self.assertIn("Permission denied", state.status_message)
+
+    def test_elapsed_seconds_parses_ps_etime_formats(self) -> None:
+        self.assertEqual(elapsed_seconds("01:02"), 62)
+        self.assertEqual(elapsed_seconds("03:01:02"), 10862)
+        self.assertEqual(elapsed_seconds("1-03:01:02"), 97262)
+
+
+if __name__ == "__main__":
+    unittest.main()
