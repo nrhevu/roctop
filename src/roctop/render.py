@@ -37,6 +37,14 @@ def render_header(snapshot: Snapshot) -> Panel:
     if snapshot.driver_version:
         details.append("   ROCm Driver: ", style=DRACULA_DIM)
         details.append(snapshot.driver_version, style=DRACULA_GREEN)
+    gpu_types = summarize_gpu_types(snapshot.gpus)
+    if gpu_types:
+        details.append("   Type: ", style=DRACULA_DIM)
+        details.append(gpu_types, style=DRACULA_CYAN)
+    gfx_versions = summarize_gfx_versions(snapshot.gpus)
+    if gfx_versions:
+        details.append("   GFX: ", style=DRACULA_DIM)
+        details.append(gfx_versions, style=DRACULA_CYAN)
     details.append("   Press Ctrl-C to quit", style=DRACULA_DIM)
     return Panel(details, title=title, border_style=DRACULA_DIM, box=box.SQUARE)
 
@@ -45,7 +53,6 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("IDs (DID, GUID)", overflow="fold")
-    table.add_column("Type", overflow="fold")
     table.add_column("Temp", justify="right")
     table.add_column("Fan", justify="right")
     table.add_column("Power", justify="right")
@@ -63,14 +70,9 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         sclk = format_clock(gpu.sclk_mhz)
         mclk = format_clock(gpu.mclk_mhz)
         name = format_gpu_name(gpu)
-        gpu_type = format_gpu_type(gpu)
         row = [
             str(gpu.index),
             name,
-            Text(
-                gpu_type or "N/A",
-                style=DRACULA_CYAN if gpu_type else DRACULA_DIM,
-            ),
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(
                 format_fan(gpu.fan_percent, gpu.fan_rpm),
@@ -96,13 +98,27 @@ def format_gpu_name(gpu: GpuInfo) -> str:
     return gpu.name
 
 
-def format_gpu_type(gpu: GpuInfo) -> str:
-    parts = []
-    if gpu.gpu_type:
-        parts.append(gpu.gpu_type)
-    if gpu.gfx_version and gpu.gfx_version.lower() not in gpu.gpu_type.lower():
-        parts.append(gpu.gfx_version)
-    return " ".join(parts)
+def summarize_gpu_types(gpus: list[GpuInfo]) -> str:
+    return ", ".join(unique_non_empty(gpu.gpu_type for gpu in gpus))
+
+
+def summarize_gfx_versions(gpus: list[GpuInfo]) -> str:
+    return ", ".join(unique_non_empty(gpu.gfx_version for gpu in gpus))
+
+
+def unique_non_empty(values) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(text)
+    return unique
 
 
 def render_process_table(processes: list[ProcessInfo]) -> Table:
