@@ -116,6 +116,34 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(processes[0].pid, 710898)
         self.assertGreater(processes[0].gpu_memory_percent, 60)
 
+    def test_parse_amd_smi_process_json_skips_non_object_entries(self) -> None:
+        gpus, _, _ = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "VRAM Total Memory (B)": "10485760",
+                    "VRAM Total Used Memory (B)": "1048576",
+                }
+            }
+        )
+        raw = [
+            "not a gpu entry",
+            {"gpu": 0, "process_list": "N/A"},
+            {
+                "gpu": 0,
+                "process_list": [
+                    "not a process entry",
+                    {"process_info": "N/A"},
+                    {"process_info": {"pid": 123, "memory_usage": "N/A"}},
+                    {"process_info": {"pid": 456, "memory_usage": {"vram_mem": {"value": 1048576}}}},
+                ],
+            },
+        ]
+
+        processes = parse_amd_smi_process_json(raw, gpus)
+
+        self.assertEqual(len(processes), 1)
+        self.assertEqual(processes[0].pid, 456)
+
     def test_merge_process_sources_fills_name(self) -> None:
         primary = [ProcessInfo(gpu_index=4, pid=42, gpu_memory_bytes=100)]
         fallback = [

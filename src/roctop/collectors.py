@@ -224,20 +224,34 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
 
 
 def parse_amd_smi_process_json(data: list[dict[str, Any]], gpus: list[GpuInfo]) -> list[ProcessInfo]:
+    if not isinstance(data, list):
+        return []
+
     total_by_gpu = {gpu.index: gpu.memory_total_bytes for gpu in gpus}
     processes: list[ProcessInfo] = []
     for gpu_entry in data:
+        if not isinstance(gpu_entry, dict):
+            continue
         gpu_index = parse_int(gpu_entry.get("gpu"), default=-1)
         if gpu_index < 0:
             continue
-        for process_entry in gpu_entry.get("process_list", []) or []:
+        process_list = gpu_entry.get("process_list", []) or []
+        if not isinstance(process_list, list):
+            continue
+        for process_entry in process_list:
+            if not isinstance(process_entry, dict):
+                continue
             info = process_entry.get("process_info", {})
+            if not isinstance(info, dict):
+                continue
             pid = parse_int(info.get("pid"), default=-1)
             if pid < 0:
                 continue
             gpu_memory = parse_int(value_field(info.get("mem_usage")))
             if gpu_memory <= 0:
-                gpu_memory = parse_int(value_field(info.get("memory_usage", {}).get("vram_mem", {})))
+                memory_usage = info.get("memory_usage", {})
+                if isinstance(memory_usage, dict):
+                    gpu_memory = parse_int(value_field(memory_usage.get("vram_mem", {})))
             if gpu_memory <= 0:
                 continue
             total = total_by_gpu.get(gpu_index, 0)
