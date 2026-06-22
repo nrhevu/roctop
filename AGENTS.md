@@ -29,6 +29,17 @@ Run the app locally:
 
 Use `--once` or `--json` for quick verification when a live terminal UI is not needed.
 
+## Codex Skills
+
+On first entry to this repo, install bundled Codex skills before task work:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R skills/roctop-demo-svg "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
+Re-run this when `skills/` changes so local skill behavior matches the repo. Use `skills/roctop-demo-svg/scripts/generate_demo_svg.py` to refresh demo assets.
+
 ## Coding Style & Naming Conventions
 
 Use 4-space indentation, type hints, and small functions with explicit dataclasses for structured data. Match the existing straightforward Python style; avoid broad refactors while fixing targeted behavior. Use `snake_case` for functions and variables, `PascalCase` for dataclasses and exceptions, and uppercase constants for command arguments or color constants. There is no configured formatter or linter in `pyproject.toml`, so keep formatting consistent with nearby code.
