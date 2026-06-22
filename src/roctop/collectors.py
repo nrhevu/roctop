@@ -211,8 +211,6 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
         parts = [part.strip() for part in str(raw_value).split(",")]
         name = parts[0] if parts else ""
         gpu_memory = parse_int(parts[2] if len(parts) > 2 else 0)
-        if gpu_memory <= 0:
-            continue
         processes.append(
             ProcessInfo(
                 gpu_index=None,
@@ -280,6 +278,8 @@ def merge_process_sources(primary: list[ProcessInfo], fallback: list[ProcessInfo
             proc.command = fallback_proc.command
         if proc.gpu_memory_bytes <= 0:
             proc.gpu_memory_bytes = fallback_proc.gpu_memory_bytes
+    primary_pids = {proc.pid for proc in primary}
+    primary.extend(proc for pid, proc in fallback_by_pid.items() if pid not in primary_pids)
     return primary
 
 

@@ -79,8 +79,10 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].sclk_mhz, 173)
         self.assertEqual(gpus[0].mclk_mhz, 2000)
         self.assertEqual(gpus[0].memory_used_bytes, 200804560896)
-        self.assertEqual(len(processes), 1)
+        self.assertEqual(len(processes), 2)
         self.assertEqual(processes[0].pid, 710898)
+        self.assertEqual(processes[1].pid, 721888)
+        self.assertEqual(processes[1].gpu_memory_bytes, 0)
 
     def test_parse_amd_smi_process_json_filters_zero_memory(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(
@@ -116,10 +118,15 @@ class CollectorTests(unittest.TestCase):
 
     def test_merge_process_sources_fills_name(self) -> None:
         primary = [ProcessInfo(gpu_index=4, pid=42, gpu_memory_bytes=100)]
-        fallback = [ProcessInfo(gpu_index=None, pid=42, name="python", command="python", gpu_memory_bytes=200)]
+        fallback = [
+            ProcessInfo(gpu_index=None, pid=42, name="python", command="python", gpu_memory_bytes=200),
+            ProcessInfo(gpu_index=None, pid=43, name="server", command="server", gpu_memory_bytes=0),
+        ]
         merged = merge_process_sources(primary, fallback)
         self.assertEqual(merged[0].name, "python")
         self.assertEqual(merged[0].gpu_memory_bytes, 100)
+        self.assertEqual(merged[1].pid, 43)
+        self.assertEqual(merged[1].command, "server")
 
     def test_format_bytes_mib(self) -> None:
         self.assertEqual(format_bytes_mib(0), "0MiB")

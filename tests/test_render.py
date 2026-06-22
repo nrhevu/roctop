@@ -193,6 +193,31 @@ class RenderTests(unittest.TestCase):
         self.assertIn("38;2;241;250;140", output)
         self.assertIn("38;2;80;250;123", output)
 
+    def test_process_command_wraps_instead_of_truncating(self) -> None:
+        long_args = "python -m sglang.launch_server --model-path /models/deepseek --tensor-parallel-size 8 --final-token"
+        console = Console(width=90, record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                [
+                    ProcessInfo(
+                        gpu_index=0,
+                        pid=123,
+                        user="root",
+                        gpu_memory_bytes=512 * 1024 * 1024,
+                        gpu_memory_percent=12.5,
+                        cpu_percent=65.2,
+                        host_mem_percent=7.4,
+                        elapsed="01:02",
+                        command="python",
+                        args=long_args,
+                    )
+                ]
+            )
+        )
+        output = console.export_text()
+        self.assertIn("--model-path", output)
+        self.assertIn("--final-token", output)
+
 
 if __name__ == "__main__":
     unittest.main()

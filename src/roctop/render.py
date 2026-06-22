@@ -244,7 +244,7 @@ def render_process_table(processes: list[ProcessInfo]) -> Table:
     table.add_column("%CPU", justify="right")
     table.add_column("%MEM", justify="right")
     table.add_column("TIME", justify="right")
-    table.add_column("COMMAND", overflow="ellipsis", ratio=2)
+    table.add_column("COMMAND", overflow="fold", ratio=4)
 
     if not processes:
         table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
