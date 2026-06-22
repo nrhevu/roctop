@@ -70,7 +70,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
 
-    def test_fan_column_hidden_when_unsupported(self) -> None:
+    def test_fan_column_visible_when_unsupported(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
             gpus=[
@@ -88,7 +88,8 @@ class RenderTests(unittest.TestCase):
         console = Console(width=120, record=True, file=StringIO())
         console.print(render_snapshot(snapshot))
         output = console.export_text()
-        self.assertNotIn("Fan", output)
+        self.assertIn("Fan", output)
+        self.assertIn("N/A", output)
 
     def test_high_util_bar_uses_red_style(self) -> None:
         console = Console(width=80, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
