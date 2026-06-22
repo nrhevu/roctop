@@ -150,8 +150,8 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table.add_column("SCLK", justify="right")
     table.add_column("MCLK", justify="right")
     table.add_column("Memory-Usage", justify="right")
-    table.add_column("MEM", ratio=2)
-    table.add_column("UTL", ratio=2)
+    table.add_column("%Memory-Usage", ratio=2)
+    table.add_column("%Utilization", ratio=2)
 
     for gpu in gpus:
         mem_style = percent_style(gpu.memory_percent)

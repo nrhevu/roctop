@@ -85,8 +85,11 @@ class RenderTests(unittest.TestCase):
         self.assertIn("266W", output)
         self.assertIn("173MHz", output)
         self.assertIn("2000MHz", output)
+        self.assertIn("%Memory-Usage", output)
+        self.assertIn("%Utilization", output)
         self.assertIn("25.0%", output)
         self.assertIn("42%", output)
+        self.assertNotIn("UTL", output)
         self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
         self.assertIn("%GPU-MEM", output)
@@ -143,7 +146,7 @@ class RenderTests(unittest.TestCase):
         self.assertLess(output.index("Avg %CPU: 37.3%"), output.index("120s"))
         self.assertLess(output.index("120s"), output.index("Avg %MEM: 77.2%"))
         self.assertLess(output.index("Avg %GPU: 33.2%"), output.index("Avg %GPU MEM: 54.6%"))
-        self.assertLess(output.index("UTL"), output.index("Avg %CPU"))
+        self.assertLess(output.index("%Utilization"), output.index("Avg %CPU"))
         self.assertLess(output.index("Avg %CPU"), output.index("PID"))
 
     def test_low_history_values_draw_visible_trace_on_right(self) -> None:
