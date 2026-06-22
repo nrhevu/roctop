@@ -52,7 +52,8 @@ def render_header(snapshot: Snapshot) -> Panel:
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
-    table.add_column("IDs (DID, GUID)", overflow="fold")
+    table.add_column("DIDs", overflow="fold")
+    table.add_column("GUIDs", overflow="fold")
     table.add_column("Temp", justify="right")
     table.add_column("Fan", justify="right")
     table.add_column("Power", justify="right")
@@ -69,10 +70,10 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
         sclk = format_clock(gpu.sclk_mhz)
         mclk = format_clock(gpu.mclk_mhz)
-        name = format_gpu_name(gpu)
         row = [
             str(gpu.index),
-            name,
+            gpu.name,
+            Text(gpu.guid or "N/A", style=DRACULA_FG if gpu.guid else DRACULA_DIM),
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(
                 format_fan(gpu.fan_percent, gpu.fan_rpm),
@@ -90,12 +91,6 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         ]
         table.add_row(*row)
     return table
-
-
-def format_gpu_name(gpu: GpuInfo) -> str:
-    if gpu.guid:
-        return f"{gpu.name}, {gpu.guid}"
-    return gpu.name
 
 
 def summarize_gpu_types(gpus: list[GpuInfo]) -> str:
