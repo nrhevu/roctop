@@ -247,7 +247,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("j/k move", plain)
         self.assertIn("48;2;68;71;90", styled)
 
-    def test_process_help_renders_in_header_with_key_labels(self) -> None:
+    def test_process_help_renders_on_second_header_line_with_key_labels(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
             processes=[
@@ -260,13 +260,15 @@ class RenderTests(unittest.TestCase):
         console.print(render_snapshot(snapshot, process_state=state, terminal_height=40))
         plain = console.export_text(clear=False)
         styled = console.export_text(styles=True)
-        self.assertIn("Processes: 2/2", plain)
-        self.assertIn("Sort: default", plain)
+        self.assertNotIn("Processes:", plain)
+        self.assertNotIn("Sort:", plain)
+        self.assertIn("Processes  2/2  sort: default", plain)
         self.assertIn("j/k: move", plain)
         self.assertIn("PgUp/PgDn: scroll", plain)
         self.assertIn("s: sort", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("q: quit", plain)
+        self.assertLess(plain.index("Mon Jun 22"), plain.index("j/k: move"))
         self.assertIn("38;2;255;184;108", styled)
 
     def test_process_view_state_limits_visible_rows(self) -> None:

@@ -101,30 +101,26 @@ def render_header(
         details.append("   GFX: ", style=DRACULA_DIM)
         details.append(gfx_versions, style=DRACULA_CYAN)
     if process_state is not None:
-        details.append("   ")
-        append_process_help(details, process_state, process_count)
+        details.append("\n")
+        append_process_help(details)
     else:
-        details.append("   Press Ctrl-C to quit", style=DRACULA_DIM)
+        details.append("\n")
+        details.append("Ctrl-C: ", style=f"bold {DRACULA_ORANGE}")
+        details.append("quit", style=DRACULA_DIM)
     return Panel(details, title=title, border_style=DRACULA_DIM, box=box.SQUARE)
 
 
-def append_process_help(details: Text, process_state: ProcessViewState, process_count: int) -> None:
-    details.append("Processes: ", style=DRACULA_DIM)
-    if process_count:
-        details.append(f"{process_state.selected_index + 1}/{process_count}", style=DRACULA_PURPLE)
-    else:
-        details.append("0/0", style=DRACULA_DIM)
-    details.append("   Sort: ", style=DRACULA_DIM)
-    details.append(process_state.sort_label(), style=DRACULA_CYAN)
-    append_keybinding(details, "j/k", "move")
+def append_process_help(details: Text) -> None:
+    append_keybinding(details, "j/k", "move", leading_space=False)
     append_keybinding(details, "PgUp/PgDn", "scroll")
     append_keybinding(details, "s", "sort")
     append_keybinding(details, "x", "kill")
     append_keybinding(details, "q", "quit")
 
 
-def append_keybinding(details: Text, key: str, action: str) -> None:
-    details.append("   ")
+def append_keybinding(details: Text, key: str, action: str, leading_space: bool = True) -> None:
+    if leading_space:
+        details.append("   ")
     details.append(f"{key}: ", style=f"bold {DRACULA_ORANGE}")
     details.append(action, style=DRACULA_DIM)
 
