@@ -238,7 +238,14 @@ class MetricGraphPair:
         yield from metric_graph_lines(top_values, width=width, height=self.height, style=self.top_style, trim_empty=False)
         yield time_axis_line(width)
         yield from reversed(
-            metric_graph_lines(bottom_values, width=width, height=self.height, style=self.bottom_style, trim_empty=False)
+            metric_graph_lines(
+                bottom_values,
+                width=width,
+                height=self.height,
+                style=self.bottom_style,
+                trim_empty=False,
+                invert_dots=True,
+            )
         )
         yield metric_label(self.bottom_label, latest_value(bottom_values), self.bottom_style)
 
@@ -278,6 +285,7 @@ def metric_graph_lines(
     style: str,
     rows_per_line: int = GRAPH_ROWS_PER_LINE,
     trim_empty: bool = True,
+    invert_dots: bool = False,
 ) -> list[Text]:
     width = max(1, width)
     height = max(1, height)
@@ -294,6 +302,8 @@ def metric_graph_lines(
                 line_top_level=line_top_level,
                 rows_per_line=rows_per_line,
             )
+            if invert_dots:
+                active_mask = flip_braille_vertical(active_mask)
             if active_mask:
                 line.append(braille_char(active_mask), style=style)
             else:
@@ -321,6 +331,16 @@ def braille_graph_mask(filled_rows: int, line_top_level: int, rows_per_line: int
         if filled_rows >= level:
             mask |= dot_mask
     return mask
+
+
+def flip_braille_vertical(mask: int) -> int:
+    flipped = 0
+    for top_row, bottom_row in ((0x09, 0xC0), (0x12, 0x24)):
+        if mask & top_row:
+            flipped |= bottom_row
+        if mask & bottom_row:
+            flipped |= top_row
+    return flipped
 
 
 def braille_char(mask: int) -> str:

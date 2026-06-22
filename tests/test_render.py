@@ -151,6 +151,19 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         self.assertEqual(lines[-1].plain, "    ⠤⠶")
 
+    def test_metric_graph_can_flip_dots_inside_braille_cell(self) -> None:
+        normal = metric_graph_lines([25.0], width=1, height=4, style="green", trim_empty=False)
+        inverted = metric_graph_lines(
+            [25.0],
+            width=1,
+            height=4,
+            style="green",
+            trim_empty=False,
+            invert_dots=True,
+        )
+        self.assertEqual(normal[0].plain, "⣀")
+        self.assertEqual(inverted[0].plain, "⠉")
+
     def test_metric_graph_pair_keeps_axes_and_bottom_labels_aligned(self) -> None:
         history = MetricsHistory(max_samples=120)
         history.append_sample(
