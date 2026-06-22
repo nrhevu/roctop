@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
-from roctop.render import bar_with_percent, percent_style, render_snapshot
+from roctop.render import bar_with_percent, percent_style, render_process_table, render_snapshot
 
 
 class RenderTests(unittest.TestCase):
@@ -39,6 +39,7 @@ class RenderTests(unittest.TestCase):
                     user="root",
                     cpu_percent=12.3,
                     host_mem_percent=0.4,
+                    cu_occupancy=83,
                     elapsed="01:02",
                     command="python",
                     args="python train.py --long-argument",
@@ -71,6 +72,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("42%", output)
         self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
+        self.assertIn("%GPU", output)
+        self.assertIn("83", output)
 
     def test_fan_column_visible_when_unsupported(self) -> None:
         snapshot = Snapshot(
@@ -99,6 +102,32 @@ class RenderTests(unittest.TestCase):
         output = console.export_text(styles=True)
         self.assertIn("38;2;255;85;85", output)
         self.assertIn("100%", output)
+
+    def test_process_metric_columns_are_colored(self) -> None:
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                [
+                    ProcessInfo(
+                        gpu_index=0,
+                        pid=123,
+                        user="root",
+                        gpu_memory_bytes=512 * 1024 * 1024,
+                        gpu_memory_percent=12.5,
+                        cu_occupancy=88,
+                        cpu_percent=65.2,
+                        host_mem_percent=7.4,
+                        elapsed="01:02",
+                        args="python train.py",
+                    )
+                ]
+            )
+        )
+        output = console.export_text(styles=True)
+        self.assertIn("%GPU", output)
+        self.assertIn("38;2;255;85;85", output)
+        self.assertIn("38;2;241;250;140", output)
+        self.assertIn("38;2;80;250;123", output)
 
 
 if __name__ == "__main__":
