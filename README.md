@@ -4,6 +4,10 @@
 VRAM usage, utilization, temperature, and GPU processes in a refreshing terminal
 UI.
 
+## Demo
+
+![roctop demo](docs/demo.png)
+
 ## Install
 
 ```bash
