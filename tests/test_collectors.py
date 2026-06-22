@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import unittest
 
+from roctop import collectors
 from roctop.collectors import (
+    CommandInterrupted,
+    CommandResult,
     CommandTimeout,
+    collect_snapshot,
     load_json_from_text,
     merge_process_sources,
     parse_amd_smi_process_json,
@@ -26,6 +30,19 @@ class CollectorTests(unittest.TestCase):
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["rocm-smi"], 1)):
             with self.assertRaises(CommandTimeout):
                 run_command(["rocm-smi"], timeout=1)
+
+    def test_collect_snapshot_raises_command_interrupted(self) -> None:
+        original_run_command = collectors.run_command
+
+        def fake_run_command(*args, **kwargs) -> CommandResult:
+            return CommandResult(args=["rocm-smi"], returncode=-11, stdout="", stderr="")
+
+        try:
+            collectors.run_command = fake_run_command
+            with self.assertRaises(CommandInterrupted):
+                collect_snapshot()
+        finally:
+            collectors.run_command = original_run_command
 
     def test_parse_rocm_smi_json(self) -> None:
         raw = {

@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.live import Live
 
 from . import __version__
-from .collectors import CollectionError, CommandTimeout, collect_snapshot
+from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot
 from .history import MetricsHistory
 from .render import render_snapshot
 
@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         return run_live(console, args.interval)
+    except (KeyboardInterrupt, CommandInterrupted):
+        return 0
     except CollectionError as exc:
         error_console.print(f"[red]{exc}[/red]")
         return 1
@@ -73,6 +75,8 @@ def collect_snapshot_retry(interval: float):
     while True:
         try:
             return collect_snapshot()
+        except KeyboardInterrupt:
+            raise
         except CommandTimeout:
             time.sleep(interval)
 
