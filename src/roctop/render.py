@@ -47,7 +47,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     for gpu in gpus:
         mem_style = percent_style(gpu.memory_percent)
         util_style = percent_style(gpu.utilization_percent)
-        temp = f"{gpu.temperature_c:.0f}C" if gpu.temperature_c is not None else "N/A"
+        temp = f"{gpu.temperature_c:.0f}°C" if gpu.temperature_c is not None else "N/A"
         name = gpu.name
         if gpu.gfx_version and gpu.gfx_version not in name:
             name = f"{name} {gpu.gfx_version}"

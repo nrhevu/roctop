@@ -47,6 +47,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("roctop", output)
         self.assertIn("AMD", output)
         self.assertIn("Instinct", output)
+        self.assertIn("60°C", output)
         self.assertIn("123", output)
 
 

@@ -6,7 +6,7 @@ UI.
 
 ## Demo
 
-![roctop demo](docs/demo.png)
+![roctop demo](docs/demo.svg)
 
 ## Install
 
