@@ -43,7 +43,6 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table.add_column("SCLK", justify="right")
     table.add_column("MCLK", justify="right")
     table.add_column("Memory-Usage", justify="right")
-    table.add_column("GPU-Util", justify="right")
     table.add_column("MEM", ratio=2)
     table.add_column("UTL", ratio=2)
 
@@ -68,9 +67,8 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
                 f"{format_bytes_mib(gpu.memory_used_bytes)} / {format_bytes_mib(gpu.memory_total_bytes)}",
                 style=mem_style,
             ),
-            Text(percent_text(gpu.utilization_percent), style=util_style),
-            progress_cell(gpu.memory_percent, mem_style),
-            progress_cell(gpu.utilization_percent, util_style),
+            bar_with_percent(gpu.memory_percent, mem_style, digits=1),
+            bar_with_percent(gpu.utilization_percent, util_style),
         )
     return table
 
@@ -135,6 +133,17 @@ def ui_warnings(warnings: list[str]) -> list[str]:
 
 def progress_cell(percent: float, style: str) -> ProgressBar:
     return ProgressBar(total=100, completed=clamp_percent(percent), width=None, style="grey23", complete_style=style)
+
+
+def bar_with_percent(percent: float, style: str, digits: int = 0) -> Table:
+    grid = Table.grid(expand=True)
+    grid.add_column(ratio=1)
+    grid.add_column(justify="right", no_wrap=True, width=7)
+    grid.add_row(
+        progress_cell(percent, style),
+        Text(percent_text(percent, digits=digits), style=style, no_wrap=True),
+    )
+    return grid
 
 
 def percent_style(percent: float | int | None) -> str:

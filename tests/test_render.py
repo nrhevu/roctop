@@ -53,6 +53,9 @@ class RenderTests(unittest.TestCase):
         self.assertIn("266W", output)
         self.assertIn("173MHz", output)
         self.assertIn("2000MHz", output)
+        self.assertIn("25.0%", output)
+        self.assertIn("42%", output)
+        self.assertNotIn("GPU-Util", output)
         self.assertIn("123", output)
 
 
