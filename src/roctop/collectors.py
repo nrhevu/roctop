@@ -30,6 +30,12 @@ ROCM_SMI_ARGS = [
 
 AMD_SMI_PROCESS_ARGS = ["amd-smi", "process", "-G", "--json"]
 ROCM_SMI_TIMEOUT_SECONDS = 15.0
+GPU_TYPE_BY_DEVICE_ID = {
+    "0x75b0": "AMD MI350",
+}
+GPU_TYPE_BY_GFX_VERSION = {
+    "gfx950": "AMD MI350",
+}
 
 
 @dataclass(slots=True)
@@ -145,6 +151,7 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
             GpuInfo(
                 index=index,
                 name=name,
+                gpu_type=infer_gpu_type(value),
                 gfx_version=gfx_version,
                 temperature_c=parse_optional_float(
                     first_non_empty(
@@ -355,6 +362,38 @@ def first_non_empty(*values: Any) -> str:
         if text and text.upper() != "N/A":
             return text
     return ""
+
+
+def infer_gpu_type(data: dict[str, Any]) -> str:
+    product_name = compact_gpu_type(
+        first_non_empty(
+            data.get("Card Series"),
+            data.get("Card SKU"),
+            data.get("Card Name"),
+            data.get("Product Name"),
+        )
+    )
+    if product_name:
+        return product_name
+
+    device_id = first_non_empty(data.get("Card Model"), data.get("Device ID")).lower()
+    if device_id in GPU_TYPE_BY_DEVICE_ID:
+        return GPU_TYPE_BY_DEVICE_ID[device_id]
+
+    gfx_version = str(data.get("GFX Version", "") or "").strip().lower()
+    return GPU_TYPE_BY_GFX_VERSION.get(gfx_version, "")
+
+
+def compact_gpu_type(value: Any) -> str:
+    text = first_non_empty(value)
+    if not text:
+        return ""
+    match = re.search(r"\bMI\s*([0-9]{3,4}[A-Z]?)\b", text, flags=re.IGNORECASE)
+    if match:
+        return f"AMD MI{match.group(1).upper()}"
+    if re.fullmatch(r"0x[0-9a-f]+", text, flags=re.IGNORECASE):
+        return ""
+    return text
 
 
 def parse_optional_float(value: Any) -> float | None:

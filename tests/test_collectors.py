@@ -52,6 +52,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(driver, "6.14.14")
         self.assertEqual(len(gpus), 1)
         self.assertEqual(gpus[0].index, 0)
+        self.assertEqual(gpus[0].gpu_type, "AMD MI350")
         self.assertEqual(gpus[0].utilization_percent, 99)
         self.assertEqual(gpus[0].fan_percent, 42.0)
         self.assertEqual(gpus[0].fan_rpm, 3200)

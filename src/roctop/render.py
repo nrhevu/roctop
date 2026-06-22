@@ -46,6 +46,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("Name", overflow="fold")
+    table.add_column("Type", overflow="fold")
     table.add_column("Temp", justify="right")
     if has_fan:
         table.add_column("Fan", justify="right")
@@ -69,6 +70,10 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         row = [
             str(gpu.index),
             name,
+            Text(
+                gpu.gpu_type or "N/A",
+                style=DRACULA_CYAN if gpu.gpu_type else DRACULA_DIM,
+            ),
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(power, style=power_style(gpu.power_w)),
             Text(sclk, style=clock_style(gpu.sclk_mhz)),
@@ -82,7 +87,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         ]
         if has_fan:
             row.insert(
-                3,
+                4,
                 Text(
                     format_fan(gpu.fan_percent, gpu.fan_rpm),
                     style=fan_style(gpu.fan_percent, gpu.fan_rpm),

@@ -1,7 +1,8 @@
 # roctop
 
 `roctop` is a small AMD ROCm GPU monitor. It shows GPU VRAM usage,
-utilization, temperature, and GPU processes in a refreshing terminal UI.
+utilization, type, temperature, power, clocks, and GPU processes in a
+refreshing terminal UI.
 
 ## Demo
 

@@ -19,6 +19,7 @@ class RenderTests(unittest.TestCase):
                 GpuInfo(
                     index=0,
                     name="AMD Instinct",
+                    gpu_type="AMD MI350",
                     gfx_version="gfx950",
                     temperature_c=60,
                     fan_percent=42,
@@ -50,6 +51,7 @@ class RenderTests(unittest.TestCase):
         output = console.export_text()
         self.assertIn("roctop", output)
         self.assertIn("AMD", output)
+        self.assertIn("AMD MI350", output)
         self.assertIn("60°C", output)
         self.assertIn("42%", output)
         self.assertIn("266W", output)

@@ -9,6 +9,7 @@ from typing import Any
 class GpuInfo:
     index: int
     name: str = "AMD GPU"
+    gpu_type: str = ""
     gfx_version: str = ""
     temperature_c: float | None = None
     fan_percent: float | None = None
