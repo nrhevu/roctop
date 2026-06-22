@@ -38,6 +38,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("Name", overflow="fold")
     table.add_column("Temp", justify="right")
+    table.add_column("Fan", justify="right")
     table.add_column("Power", justify="right")
     table.add_column("SCLK", justify="right")
     table.add_column("MCLK", justify="right")
@@ -49,6 +50,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
         mem_style = percent_style(gpu.memory_percent)
         util_style = percent_style(gpu.utilization_percent)
         temp = f"{gpu.temperature_c:.0f}°C" if gpu.temperature_c is not None else "N/A"
+        fan = format_fan(gpu.fan_percent, gpu.fan_rpm)
         power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
         sclk = format_clock(gpu.sclk_mhz)
         mclk = format_clock(gpu.mclk_mhz)
@@ -59,6 +61,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
             str(gpu.index),
             name,
             Text(temp, style=temp_style(gpu.temperature_c)),
+            Text(fan, style=fan_style(gpu.fan_percent, gpu.fan_rpm)),
             Text(power, style=power_style(gpu.power_w)),
             Text(sclk, style=clock_style(gpu.sclk_mhz)),
             Text(mclk, style=clock_style(gpu.mclk_mhz)),
@@ -169,6 +172,22 @@ def temp_style(temp_c: float | None) -> str:
         return "bold red"
     if temp_c >= 65:
         return "yellow"
+    return "green"
+
+
+def format_fan(fan_percent: float | None, fan_rpm: int | None) -> str:
+    if fan_percent is not None:
+        return percent_text(fan_percent)
+    if fan_rpm is not None:
+        return f"{fan_rpm}RPM"
+    return "N/A"
+
+
+def fan_style(fan_percent: float | None, fan_rpm: int | None) -> str:
+    if fan_percent is None and fan_rpm is None:
+        return "dim"
+    if fan_percent is not None:
+        return percent_style(fan_percent)
     return "green"
 
 

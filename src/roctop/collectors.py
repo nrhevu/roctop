@@ -20,6 +20,7 @@ ROCM_SMI_ARGS = [
     "--showmeminfo",
     "vram",
     "--showtemp",
+    "--showfan",
     "--showclocks",
     "--showpower",
     "--showpids",
@@ -152,6 +153,8 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
                         value.get("temperature_hotspot (C)"),
                     )
                 ),
+                fan_percent=parse_fan_percent(value),
+                fan_rpm=parse_fan_rpm(value),
                 power_w=parse_optional_float(
                     first_non_empty(
                         value.get("Current Socket Graphics Package Power (W)"),
@@ -370,6 +373,61 @@ def parse_clock_mhz(value: Any) -> int | None:
     if not text or text.upper() == "N/A":
         return None
     match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    if not match:
+        return None
+    return int(round(float(match.group(0))))
+
+
+def parse_fan_percent(data: dict[str, Any]) -> float | None:
+    for key in (
+        "Fan Speed (%)",
+        "Fan Speed",
+        "Fan Level",
+        "fan_speed (%)",
+        "current_fan_speed (%)",
+    ):
+        value = data.get(key)
+        parsed = parse_percent_from_text(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def parse_fan_rpm(data: dict[str, Any]) -> int | None:
+    for key in (
+        "Fan Speed (RPM)",
+        "Fan RPM",
+        "Current Fan Speed (RPM)",
+        "current_fan_speed (rpm)",
+    ):
+        value = data.get(key)
+        parsed = parse_int_from_text(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def parse_percent_from_text(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A" or "not supported" in text.lower():
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?(?=\s*%)", text)
+    if match:
+        return clamp_percent(float(match.group(0)))
+    if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", text):
+        return clamp_percent(float(text))
+    return None
+
+
+def parse_int_from_text(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.upper() == "N/A" or "not supported" in text.lower():
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
     if not match:
         return None
     return int(round(float(match.group(0))))

@@ -11,6 +11,8 @@ class GpuInfo:
     name: str = "AMD GPU"
     gfx_version: str = ""
     temperature_c: float | None = None
+    fan_percent: float | None = None
+    fan_rpm: int | None = None
     power_w: float | None = None
     sclk_mhz: int | None = None
     mclk_mhz: int | None = None
