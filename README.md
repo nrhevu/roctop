@@ -8,6 +8,8 @@ and GPU processes in a refreshing terminal UI.
 
 ![roctop demo](docs/demo.svg)
 
+The demo is rendered from synthetic data; process names, PIDs, users, and metrics are placeholders.
+
 ## Features
 
 - GPU table with DID/GUID, temperature, fan, power, SCLK/MCLK, VRAM usage, and utilization bars.
