@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from roctop.history import MetricSample, MetricsHistory
-from roctop.interaction import MODE_KILL_CONFIRM, ProcessViewState
+from roctop.interaction import MODE_KILL_CONFIRM, MODE_SEARCH, ProcessViewState
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
@@ -340,6 +340,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("j/k: move", plain)
         self.assertIn("PgUp/PgDn: scroll", plain)
         self.assertIn("s: sort", plain)
+        self.assertIn("/: search", plain)
+        self.assertIn("n/N: next/prev", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("Mon Jun 22"), plain.index("j/k: move"))
@@ -397,6 +399,24 @@ class RenderTests(unittest.TestCase):
         self.assertLess(plain.index("Kill PID 123:"), plain.index("│ GPU", plain.index("Kill PID 123:")))
         self.assertIn("38;2;40;42;54", styled)
         self.assertIn("48;2;139;233;253", styled)
+
+    def test_search_menu_renders_input_above_process_table(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
+        ]
+        state = ProcessViewState(
+            selected_pid=123,
+            mode=MODE_SEARCH,
+            search_input="train",
+            status_message="No matches for: serve",
+            viewport_rows=4,
+        )
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        plain = console.export_text(clear=False)
+        self.assertIn("Search: train", plain)
+        self.assertIn("No matches for: serve", plain)
+        self.assertLess(plain.index("Search: train"), plain.index("│ GPU", plain.index("Search: train")))
 
     def test_sort_menu_stays_above_process_table_when_cropped(self) -> None:
         long_args = (

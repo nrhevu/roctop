@@ -54,6 +54,8 @@ roctop --json
 j/k or Up/Down    move process cursor
 PgUp/PgDn         scroll processes
 s                 open sort menu
+/                 search processes
+n/N               next/previous search match
 x                 kill selected process with confirmation
 q or Ctrl-C       quit
 ```

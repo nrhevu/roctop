@@ -21,10 +21,12 @@ KEY_PAGE_DOWN = "page_down"
 KEY_ENTER = "enter"
 KEY_ESC = "esc"
 KEY_CTRL_C = "ctrl_c"
+KEY_BACKSPACE = "backspace"
 
 MODE_NORMAL = "normal"
 MODE_SORT_MENU = "sort_menu"
 MODE_KILL_CONFIRM = "kill_confirm"
+MODE_SEARCH = "search"
 
 KILL_CONFIRM_CANCEL = "cancel"
 KILL_CONFIRM_SIGTERM = "sigterm"
@@ -95,6 +97,8 @@ class ProcessViewState:
     kill_confirm_index: int = 0
     status_message: str = ""
     viewport_rows: int = 8
+    search_query: str = ""
+    search_input: str = ""
 
     def sorted_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         rows = list(processes)
@@ -162,6 +166,9 @@ class ProcessViewState:
         if self.mode == MODE_SORT_MENU:
             return self.handle_sort_menu_key(key)
 
+        if self.mode == MODE_SEARCH:
+            return self.handle_search_key(key, processes)
+
         if key == "q":
             return KeyResult(quit=True, changed=True)
         if key in ("j", KEY_DOWN):
@@ -181,6 +188,17 @@ class ProcessViewState:
             self.sort_menu_index = current_sort_menu_index(self.sort_field)
             self.status_message = ""
             return KeyResult(changed=True)
+        if key == "/":
+            self.mode = MODE_SEARCH
+            self.search_input = ""
+            self.status_message = ""
+            return KeyResult(changed=True)
+        if key == "n":
+            self.search_next(processes, direction=1)
+            return KeyResult(changed=True)
+        if key == "N":
+            self.search_next(processes, direction=-1)
+            return KeyResult(changed=True)
         if key == "x":
             selected = self.selected_process(processes)
             if selected is None:
@@ -189,6 +207,27 @@ class ProcessViewState:
                 self.mode = MODE_KILL_CONFIRM
                 self.kill_confirm_index = 0
                 self.status_message = ""
+            return KeyResult(changed=True)
+        return KeyResult()
+
+    def handle_search_key(self, key: str, processes: list[ProcessInfo]) -> KeyResult:
+        if key == KEY_ESC:
+            self.mode = MODE_NORMAL
+            self.search_input = ""
+            self.status_message = ""
+            return KeyResult(changed=True)
+        if key == KEY_ENTER:
+            query = self.search_input.strip()
+            self.mode = MODE_NORMAL
+            self.search_input = ""
+            self.search_query = query
+            self.search_next(processes, direction=1)
+            return KeyResult(changed=True)
+        if key == KEY_BACKSPACE:
+            self.search_input = self.search_input[:-1]
+            return KeyResult(changed=True)
+        if is_printable_key(key):
+            self.search_input += key
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -269,6 +308,33 @@ class ProcessViewState:
         self.selected_pid = processes[self.selected_index].pid
         self.ensure_selected_visible(len(processes))
 
+    def search_next(self, processes: list[ProcessInfo], direction: int) -> bool:
+        query = self.search_query.strip()
+        if not query:
+            self.status_message = "No search query"
+            return False
+        match_index = self.search_match_index(processes, query, direction)
+        if match_index is None:
+            self.status_message = f"No matches for: {query}"
+            return False
+        self.selected_index = match_index
+        self.selected_pid = processes[match_index].pid
+        self.ensure_selected_visible(len(processes))
+        self.status_message = f"Search: {query}"
+        return True
+
+    def search_match_index(self, processes: list[ProcessInfo], query: str, direction: int) -> int | None:
+        if not processes:
+            return None
+        self.sync(processes)
+        step = 1 if direction >= 0 else -1
+        start = self.selected_index
+        for offset in range(1, len(processes) + 1):
+            index = (start + offset * step) % len(processes)
+            if process_matches_search(processes[index], query):
+                return index
+        return None
+
     def ensure_selected_visible(self, process_count: int) -> None:
         max_scroll = max(0, process_count - self.viewport_rows)
         if self.selected_index < self.scroll_offset:
@@ -338,6 +404,10 @@ def parse_keys(data: bytes | str) -> list[str]:
             keys.append(KEY_CTRL_C)
             index += 1
             continue
+        if char in ("\x7f", "\b"):
+            keys.append(KEY_BACKSPACE)
+            index += 1
+            continue
         if char in ("\r", "\n"):
             keys.append(KEY_ENTER)
             index += 1
@@ -366,6 +436,22 @@ def parse_keys(data: bytes | str) -> list[str]:
             keys.append(KEY_ESC)
             index += 1
     return keys
+
+
+def is_printable_key(key: str) -> bool:
+    return len(key) == 1 and key.isprintable()
+
+
+def process_matches_search(proc: ProcessInfo, query: str) -> bool:
+    needle = query.lower()
+    fields = (
+        proc.args,
+        proc.command,
+        proc.name,
+        proc.user,
+        str(proc.pid),
+    )
+    return needle in " ".join(str(field or "") for field in fields).lower()
 
 
 def process_sort_key(proc: ProcessInfo, field: str):
