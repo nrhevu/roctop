@@ -316,6 +316,18 @@ class RenderTests(unittest.TestCase):
         self.assertIn("38;2;255;85;85", output)
         self.assertIn("100%", output)
 
+    def test_percent_bar_expands_to_available_width(self) -> None:
+        narrow_console = Console(width=40, record=True, file=StringIO())
+        narrow_console.print(bar_with_percent(50, percent_style(50)))
+        wide_console = Console(width=100, record=True, file=StringIO())
+        wide_console.print(bar_with_percent(50, percent_style(50)))
+
+        narrow_line = narrow_console.export_text().splitlines()[0]
+        wide_line = wide_console.export_text().splitlines()[0]
+        self.assertEqual(len(narrow_line), 40)
+        self.assertEqual(len(wide_line), 100)
+        self.assertGreater(wide_line.index("50%"), narrow_line.index("50%"))
+
     def test_process_metric_columns_are_colored(self) -> None:
         console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
         console.print(
