@@ -65,6 +65,23 @@ class InteractionTests(unittest.TestCase):
         state.handle_key(KEY_UP, processes)
         self.assertEqual(state.selected_pid, 100)
 
+    def test_cursor_tracks_duplicate_pid_by_gpu_row(self) -> None:
+        processes = [
+            proc(100, gpu_index=0),
+            proc(100, gpu_index=1),
+            proc(101, gpu_index=2),
+        ]
+        state = ProcessViewState(viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("j", processes)
+        self.assertEqual(state.selected_pid, 100)
+        self.assertEqual(state.selected_index, 1)
+
+        state.sync(processes)
+        self.assertEqual(state.selected_pid, 100)
+        self.assertEqual(state.selected_index, 1)
+
     def test_sort_menu_applies_field_and_toggles_direction(self) -> None:
         processes = [
             proc(1, cpu_percent=1.0),

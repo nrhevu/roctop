@@ -429,8 +429,10 @@ def render_process_table(
         table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
         return table
 
-    selected_pid = process_state.selected_pid if process_state is not None else None
-    for row in display_rows:
+    selected_visible_index = None
+    if process_state is not None:
+        selected_visible_index = process_state.selected_index - process_state.scroll_offset
+    for visible_index, row in enumerate(display_rows):
         proc = row.process
         gpu = "-" if proc.gpu_index is None else str(proc.gpu_index)
         command = row.command
@@ -445,7 +447,11 @@ def render_process_table(
             metric_text(proc.host_mem_percent, digits=1),
             proc.elapsed or "-",
             command,
-            style=f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}" if selected_pid == proc.pid else None,
+            style=(
+                f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}"
+                if selected_visible_index == visible_index
+                else None
+            ),
         )
     return table
 

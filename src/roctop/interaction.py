@@ -79,6 +79,7 @@ DEFAULT_DESCENDING_SORTS = {
     "time",
 }
 STATUS_MESSAGE_SECONDS = 3.0
+ProcessSelectionKey = tuple[int, int | None]
 
 
 @dataclass(slots=True)
@@ -90,6 +91,7 @@ class KeyResult:
 @dataclass(slots=True)
 class ProcessViewState:
     selected_pid: int | None = None
+    selected_process_key: ProcessSelectionKey | None = None
     selected_index: int = 0
     scroll_offset: int = 0
     sort_field: str = SORT_DEFAULT
@@ -115,21 +117,19 @@ class ProcessViewState:
             self.viewport_rows = max(1, viewport_rows)
         if not processes:
             self.selected_pid = None
+            self.selected_process_key = None
             self.selected_index = 0
             self.scroll_offset = 0
             return
 
-        if self.selected_pid is not None:
-            for index, proc in enumerate(processes):
-                if proc.pid == self.selected_pid:
-                    self.selected_index = index
-                    break
-            else:
-                self.selected_index = clamp(self.selected_index, 0, len(processes) - 1)
-                self.selected_pid = processes[self.selected_index].pid
-        else:
-            self.selected_index = clamp(self.selected_index, 0, len(processes) - 1)
-            self.selected_pid = processes[self.selected_index].pid
+        match_index = None
+        if self.selected_process_key is not None:
+            match_index = find_process_index(processes, self.selected_process_key)
+        if match_index is None and self.selected_pid is not None:
+            match_index = find_process_pid_index(processes, self.selected_pid)
+        if match_index is None:
+            match_index = clamp(self.selected_index, 0, len(processes) - 1)
+        self.select_index(processes, match_index)
 
         self.ensure_selected_visible(len(processes))
 
@@ -320,8 +320,7 @@ class ProcessViewState:
         if not processes:
             self.sync(processes)
             return
-        self.selected_index = clamp(self.selected_index + delta, 0, len(processes) - 1)
-        self.selected_pid = processes[self.selected_index].pid
+        self.select_index(processes, clamp(self.selected_index + delta, 0, len(processes) - 1))
         self.ensure_selected_visible(len(processes))
 
     def search_next(self, processes: list[ProcessInfo], direction: int, processes_synced: bool = False) -> bool:
@@ -333,8 +332,7 @@ class ProcessViewState:
         if match_index is None:
             self.set_status_message(f"No matches for: {query}")
             return False
-        self.selected_index = match_index
-        self.selected_pid = processes[match_index].pid
+        self.select_index(processes, match_index)
         self.ensure_selected_visible(len(processes))
         self.set_status_message(f"Search: {query}")
         return True
@@ -365,6 +363,12 @@ class ProcessViewState:
         elif self.selected_index >= self.scroll_offset + self.viewport_rows:
             self.scroll_offset = self.selected_index - self.viewport_rows + 1
         self.scroll_offset = clamp(self.scroll_offset, 0, max_scroll)
+
+    def select_index(self, processes: list[ProcessInfo], index: int) -> None:
+        self.selected_index = index
+        proc = processes[index]
+        self.selected_pid = proc.pid
+        self.selected_process_key = process_selection_key(proc)
 
     def sort_direction_label(self) -> str:
         if self.sort_field == SORT_DEFAULT:
@@ -492,6 +496,24 @@ def process_matches_search(proc: ProcessInfo, query: str) -> bool:
         str(proc.pid),
     )
     return needle in " ".join(str(field or "") for field in fields).lower()
+
+
+def process_selection_key(proc: ProcessInfo) -> ProcessSelectionKey:
+    return (proc.pid, proc.gpu_index)
+
+
+def find_process_index(processes: list[ProcessInfo], key: ProcessSelectionKey) -> int | None:
+    for index, proc in enumerate(processes):
+        if process_selection_key(proc) == key:
+            return index
+    return None
+
+
+def find_process_pid_index(processes: list[ProcessInfo], pid: int) -> int | None:
+    for index, proc in enumerate(processes):
+        if proc.pid == pid:
+            return index
+    return None
 
 
 def process_sort_key(proc: ProcessInfo, field: str):

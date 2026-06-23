@@ -332,6 +332,25 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("j/k move", plain)
         self.assertIn("48;2;68;71;90", styled)
 
+    def test_process_view_highlights_only_selected_duplicate_pid_row(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, args="cmd on gpu 0"),
+            ProcessInfo(gpu_index=1, pid=123, args="cmd on gpu 1"),
+            ProcessInfo(gpu_index=2, pid=456, args="other cmd"),
+        ]
+        state = ProcessViewState(viewport_rows=4)
+        state.sync(processes)
+        state.move_selection(processes, 1)
+
+        console = Console(width=120, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4))
+
+        styled = console.export_text(styles=True)
+        selected_lines = [line for line in styled.splitlines() if "48;2;68;71;90" in line]
+        self.assertEqual(len(selected_lines), 1)
+        self.assertIn("cmd on gpu 1", selected_lines[0])
+        self.assertNotIn("cmd on gpu 0", selected_lines[0])
+
     def test_process_help_renders_action_keys_without_navigation_hints(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
