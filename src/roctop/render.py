@@ -16,6 +16,7 @@ from .history import MetricsHistory
 from .interaction import (
     KILL_CONFIRM_LABELS,
     KILL_CONFIRM_OPTIONS,
+    MODE_FILTER,
     MODE_KILL_CONFIRM,
     MODE_SEARCH,
     MODE_SORT_MENU,
@@ -98,7 +99,7 @@ def estimate_process_view_rows(
     used_rows += len(snapshot.gpus) + 4
     if history is not None:
         used_rows += 13
-    if process_state is not None and process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM, MODE_SEARCH):
+    if process_state is not None and process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM, MODE_SEARCH, MODE_FILTER):
         used_rows += 1
     visible_warnings = ui_warnings(snapshot.warnings)
     if visible_warnings:
@@ -142,6 +143,7 @@ def render_header(
 def append_process_help(details: Text) -> None:
     append_keybinding(details, "s", "sort", leading_space=False)
     append_keybinding(details, "/", "search")
+    append_keybinding(details, "f", "filter")
     append_keybinding(details, "x", "kill")
     append_keybinding(details, "q", "quit")
 
@@ -395,7 +397,7 @@ def render_process_table(
     command_width = estimate_process_command_width(terminal_width)
     if process_state is not None:
         if not processes_sorted:
-            display_processes = process_state.sorted_processes(display_processes)
+            display_processes = process_state.display_processes(display_processes)
         process_state.sync(display_processes, viewport_rows=max_rows)
         title = render_process_title(process_state, len(display_processes))
         display_rows = visible_process_window(display_processes, process_state, max_rows, command_width)
@@ -465,7 +467,8 @@ def render_process_title(process_state: ProcessViewState, process_count: int) ->
     sort_menu = render_sort_menu(process_state)
     kill_menu = render_kill_confirm_menu(process_state)
     search_menu = render_search_menu(process_state)
-    menu = sort_menu or kill_menu or search_menu
+    filter_menu = render_filter_menu(process_state)
+    menu = sort_menu or kill_menu or search_menu or filter_menu
     if menu is not None:
         title.append("\n")
         title.append(menu)
@@ -519,6 +522,15 @@ def render_search_menu(process_state: ProcessViewState) -> Text | None:
     menu = Text(no_wrap=True, overflow="ellipsis")
     menu.append("Search: ", style=f"bold {DRACULA_CYAN}")
     menu.append(process_state.search_input, style=DRACULA_FG)
+    return menu
+
+
+def render_filter_menu(process_state: ProcessViewState) -> Text | None:
+    if process_state.mode != MODE_FILTER:
+        return None
+    menu = Text(no_wrap=True, overflow="ellipsis")
+    menu.append("Filter: ", style=f"bold {DRACULA_CYAN}")
+    menu.append(process_state.filter_input, style=DRACULA_FG)
     return menu
 
 

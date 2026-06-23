@@ -12,6 +12,7 @@ from roctop.interaction import (
     KEY_PAGE_UP,
     KEY_RIGHT,
     KEY_UP,
+    MODE_FILTER,
     MODE_KILL_CONFIRM,
     MODE_NORMAL,
     MODE_SEARCH,
@@ -188,6 +189,66 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.mode, MODE_NORMAL)
         self.assertEqual(state.search_query, "trainer")
         self.assertEqual(state.search_input, "")
+
+    def test_filter_mode_applies_query_realtime_and_keeps_it_on_enter(self) -> None:
+        processes = [
+            proc(100, args="demo::trainer"),
+            proc(101, args="demo::serve"),
+            proc(102, user="alice", args="demo::helper"),
+        ]
+        state = ProcessViewState(selected_pid=100, viewport_rows=3)
+
+        state.handle_key("f", processes)
+        self.assertEqual(state.mode, MODE_FILTER)
+        self.assertEqual(state.filter_input, "")
+        for key in "serve":
+            state.handle_key(key, processes)
+
+        self.assertEqual(state.filter_query, "serve")
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [101])
+        self.assertEqual(state.selected_pid, 101)
+
+        state.handle_key(KEY_BACKSPACE, processes)
+        self.assertEqual(state.filter_input, "serv")
+        self.assertEqual(state.filter_query, "serv")
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [101])
+
+        state.handle_key(KEY_ENTER, processes)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.filter_query, "serv")
+        self.assertEqual(state.filter_input, "serv")
+
+    def test_filter_mode_prefills_existing_query_and_escape_clears_filter(self) -> None:
+        processes = [proc(100, args="demo::trainer"), proc(101, args="demo::serve")]
+        state = ProcessViewState(filter_query="serve", viewport_rows=3)
+
+        state.handle_key("f", processes)
+        self.assertEqual(state.mode, MODE_FILTER)
+        self.assertEqual(state.filter_input, "serve")
+        state.handle_key("r", processes)
+        self.assertEqual(state.filter_query, "server")
+        self.assertEqual(state.selected_pid, None)
+
+        state.handle_key("esc", processes)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.filter_query, "")
+        self.assertEqual(state.filter_input, "")
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [100, 101])
+
+    def test_escape_clears_active_filter_without_reopening_filter_mode(self) -> None:
+        processes = [proc(100, args="demo::trainer"), proc(101, args="demo::serve")]
+        state = ProcessViewState(filter_query="serve", filter_input="serve", viewport_rows=3)
+        state.sync(state.display_processes(processes))
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [101])
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.filter_query, "")
+        self.assertEqual(state.filter_input, "")
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [100, 101])
 
     def test_search_next_and_previous_wrap_in_sorted_order(self) -> None:
         processes = [

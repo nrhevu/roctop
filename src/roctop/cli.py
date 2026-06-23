@@ -13,7 +13,19 @@ from rich.live import Live
 from . import __version__
 from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot
 from .history import MetricsHistory
-from .interaction import ProcessViewState, TerminalKeyboard
+from .interaction import (
+    KEY_DOWN,
+    KEY_ENTER,
+    KEY_PAGE_DOWN,
+    KEY_PAGE_UP,
+    KEY_UP,
+    MODE_FILTER,
+    MODE_KILL_CONFIRM,
+    MODE_SEARCH,
+    MODE_SORT_MENU,
+    ProcessViewState,
+    TerminalKeyboard,
+)
 from .models import ProcessInfo, Snapshot
 from .profiling import profile_span
 from .render import render_snapshot
@@ -236,17 +248,44 @@ def handle_key_batch(
     keys: list[str],
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
-    processes = process_state.sorted_processes(snapshot.processes)
+    processes = process_state.display_processes(snapshot.processes)
     process_state.sync(processes)
+    processes_dirty = False
     with profile_span("key-handling"):
         for key in keys:
-            sort_before = (process_state.sort_field, process_state.sort_desc)
+            if processes_dirty and key_needs_current_processes(process_state, key):
+                processes = process_state.display_processes(snapshot.processes)
+                process_state.sync(processes)
+                processes_dirty = False
+            view_before = process_view_key(process_state)
             result = process_state.handle_key(key, processes, processes_synced=True)
             quit_requested = quit_requested or result.quit
-            if (process_state.sort_field, process_state.sort_desc) != sort_before:
-                processes = process_state.sorted_processes(snapshot.processes)
-                process_state.sync(processes)
+            if process_view_key(process_state) != view_before:
+                processes_dirty = True
+        if processes_dirty:
+            processes = process_state.display_processes(snapshot.processes)
+            process_state.sync(processes)
     return quit_requested, processes
+
+
+def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str]:
+    return (
+        process_state.sort_field,
+        process_state.sort_desc,
+        process_state.filter_query.strip(),
+    )
+
+
+def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bool:
+    if process_state.mode == MODE_FILTER:
+        return False
+    if process_state.mode == MODE_SORT_MENU:
+        return False
+    if process_state.mode == MODE_SEARCH:
+        return key == KEY_ENTER
+    if process_state.mode == MODE_KILL_CONFIRM:
+        return key in ("y", "Y", KEY_ENTER)
+    return key in ("j", "k", KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, "n", "N", "x")
 
 
 def render_live_snapshot(snapshot, history: MetricsHistory, process_state: ProcessViewState, console: Console):

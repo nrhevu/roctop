@@ -28,6 +28,7 @@ MODE_NORMAL = "normal"
 MODE_SORT_MENU = "sort_menu"
 MODE_KILL_CONFIRM = "kill_confirm"
 MODE_SEARCH = "search"
+MODE_FILTER = "filter"
 
 KILL_CONFIRM_CANCEL = "cancel"
 KILL_CONFIRM_SIGTERM = "sigterm"
@@ -104,9 +105,24 @@ class ProcessViewState:
     viewport_rows: int = 8
     search_query: str = ""
     search_input: str = ""
+    filter_query: str = ""
+    filter_input: str = ""
 
     def sorted_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         rows = list(processes)
+        return self.sort_process_rows(rows)
+
+    def filtered_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
+        rows = list(processes)
+        query = self.filter_query.strip()
+        if not query:
+            return rows
+        return [proc for proc in rows if process_matches_search(proc, query)]
+
+    def display_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
+        return self.sorted_processes(self.filtered_processes(processes))
+
+    def sort_process_rows(self, rows: list[ProcessInfo]) -> list[ProcessInfo]:
         if self.sort_field == SORT_DEFAULT:
             return rows
         rows.sort(key=lambda proc: process_sort_key(proc, self.sort_field), reverse=self.sort_desc)
@@ -164,7 +180,9 @@ class ProcessViewState:
         processes_synced: bool = False,
     ) -> KeyResult:
         kill_func = kill_func or kill_process
+        source_processes = processes
         if not processes_synced:
+            processes = self.display_processes(source_processes)
             self.sync(processes)
 
         if key == KEY_CTRL_C:
@@ -178,6 +196,18 @@ class ProcessViewState:
 
         if self.mode == MODE_SEARCH:
             return self.handle_search_key(key, processes, processes_synced=True)
+
+        if self.mode == MODE_FILTER:
+            result = self.handle_filter_key(key)
+            if result.changed and not processes_synced:
+                self.sync(self.display_processes(source_processes))
+            return result
+
+        if key == KEY_ESC and self.filter_query.strip():
+            self.clear_filter()
+            if not processes_synced:
+                self.sync(self.display_processes(source_processes))
+            return KeyResult(changed=True)
 
         if key == "q":
             return KeyResult(quit=True, changed=True)
@@ -201,6 +231,11 @@ class ProcessViewState:
         if key == "/":
             self.mode = MODE_SEARCH
             self.search_input = ""
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key == "f":
+            self.mode = MODE_FILTER
+            self.filter_input = self.filter_query
             self.clear_status_message()
             return KeyResult(changed=True)
         if key == "n":
@@ -245,6 +280,34 @@ class ProcessViewState:
             self.search_input += key
             return KeyResult(changed=True)
         return KeyResult()
+
+    def handle_filter_key(self, key: str) -> KeyResult:
+        if key == KEY_ESC:
+            self.mode = MODE_NORMAL
+            self.clear_filter()
+            return KeyResult(changed=True)
+        if key == KEY_ENTER:
+            self.mode = MODE_NORMAL
+            self.filter_input = self.filter_query
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key == KEY_BACKSPACE:
+            self.filter_input = self.filter_input[:-1]
+            self.apply_filter_input()
+            return KeyResult(changed=True)
+        if is_printable_key(key):
+            self.filter_input += key
+            self.apply_filter_input()
+            return KeyResult(changed=True)
+        return KeyResult()
+
+    def apply_filter_input(self) -> None:
+        self.filter_query = self.filter_input.strip()
+
+    def clear_filter(self) -> None:
+        self.filter_input = ""
+        self.filter_query = ""
+        self.clear_status_message()
 
     def handle_kill_confirm_key(
         self,
@@ -389,7 +452,12 @@ class ProcessViewState:
         return f"Processes  {self.selected_index + 1}/{process_count}"
 
     def caption(self) -> str:
-        return self.status_message
+        parts = []
+        if self.status_message:
+            parts.append(self.status_message)
+        if self.filter_query.strip() and self.mode != MODE_FILTER:
+            parts.append(f"Filter: {self.filter_query.strip()}")
+        return "   ".join(parts)
 
     def set_status_message(self, message: str, now: float | None = None) -> None:
         self.status_message = message

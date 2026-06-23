@@ -281,6 +281,41 @@ class CliTests(unittest.TestCase):
         self.assertTrue(state.sort_desc)
         self.assertEqual(state.selected_pid, 3)
 
+    def test_handle_key_batch_filters_before_sort_and_selection(self) -> None:
+        state = cli.ProcessViewState(selected_pid=2, sort_field="cpu", sort_desc=True)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=1, cpu_percent=1.0, args="train-low"),
+                ProcessInfo(gpu_index=0, pid=2, cpu_percent=90.0, args="serve-high"),
+                ProcessInfo(gpu_index=0, pid=3, cpu_percent=30.0, args="train-mid"),
+            ],
+        )
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["f", *"train"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.filter_query, "train")
+        self.assertEqual([row.pid for row in processes], [3, 1])
+        self.assertEqual(state.selected_pid, 3)
+
+    def test_handle_key_batch_escape_clears_active_filter(self) -> None:
+        state = cli.ProcessViewState(filter_query="train", filter_input="train")
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=1, args="train-low"),
+                ProcessInfo(gpu_index=0, pid=2, args="serve-high"),
+            ],
+        )
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["esc"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.filter_query, "")
+        self.assertEqual(state.filter_input, "")
+        self.assertEqual([row.pid for row in processes], [1, 2])
+
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()
         release_collect = threading.Event()
@@ -424,6 +459,55 @@ class CliTests(unittest.TestCase):
         self.assertTrue(quit_requested)
         self.assertEqual(state.selected_pid, 1001)
         self.assertLess(key_times["j_update"] - key_times["j"], 0.2)
+
+    def test_large_process_filter_keypress_render_completes_under_200ms(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=40, width=160)
+
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_keys(self, timeout: float):
+                self.calls += 1
+                if self.calls == 1:
+                    key_times["filter"] = time.perf_counter()
+                    return ["f", "9", "9", "9"]
+                return [KEY_ENTER, "q"]
+
+        class RenderingLive:
+            def __init__(self) -> None:
+                self.updates = []
+
+            def update(self, renderable, refresh: bool = False) -> None:
+                render_console = Console(width=160, record=True, file=StringIO())
+                render_console.print(renderable)
+                if "filter" in key_times and "filter_update" not in key_times:
+                    key_times["filter_update"] = time.perf_counter()
+                self.updates.append((renderable, refresh))
+
+        key_times: dict[str, float] = {}
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=many_long_processes(1000),
+        )
+        state = cli.ProcessViewState(viewport_rows=20)
+
+        quit_requested = cli.poll_input_until_refresh(
+            RenderingLive(),
+            FakeKeyboard(),
+            snapshot,
+            cli.MetricsHistory(max_samples=120),
+            state,
+            FakeConsole(),
+            interval=1.0,
+        )
+
+        self.assertTrue(quit_requested)
+        self.assertEqual(state.filter_query, "999")
+        self.assertLess(key_times["filter_update"] - key_times["filter"], 0.2)
 
 
 if __name__ == "__main__":
