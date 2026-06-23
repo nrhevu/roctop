@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shlex
 import subprocess
@@ -159,6 +160,7 @@ def collect_snapshot(now: datetime | None = None) -> Snapshot:
 
     return Snapshot(
         timestamp=now,
+        node_name=platform.node().strip(),
         driver_version=driver_version,
         gpus=sorted(gpus, key=lambda gpu: gpu.index),
         processes=sorted(

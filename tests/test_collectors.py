@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from roctop import collectors
 from roctop.collectors import (
@@ -44,6 +45,25 @@ class CollectorTests(unittest.TestCase):
                 collect_snapshot()
         finally:
             collectors.run_command = original_run_command
+
+    def test_collect_snapshot_records_node_name(self) -> None:
+        def fake_run_command(args, **kwargs) -> CommandResult:
+            if args[0] == "rocm-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout='{"system": {"Driver version": "6.14.14"}}',
+                    stderr="",
+                )
+            return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+
+        with (
+            patch("roctop.collectors.run_command", side_effect=fake_run_command),
+            patch("roctop.collectors.platform.node", return_value="node-a"),
+        ):
+            snapshot = collect_snapshot()
+
+        self.assertEqual(snapshot.node_name, "node-a")
 
     def test_parse_rocm_smi_json(self) -> None:
         raw = {

@@ -27,6 +27,7 @@ class RenderTests(unittest.TestCase):
     def test_snapshot_renders_at_narrow_width(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            node_name="node-a",
             driver_version="6.14.14",
             gpus=[
                 GpuInfo(
@@ -66,7 +67,7 @@ class RenderTests(unittest.TestCase):
         console = Console(width=180, record=True, file=StringIO())
         console.print(render_snapshot(snapshot))
         output = console.export_text()
-        self.assertIn("roctop", output)
+        self.assertIn("roctop @ node-a", output)
         self.assertIn("GUID", output)
         self.assertNotIn("DID", output)
         self.assertNotIn("DIDs", output)

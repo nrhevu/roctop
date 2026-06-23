@@ -100,6 +100,9 @@ def render_header(
     process_count: int = 0,
 ) -> Panel:
     title = Text("roctop", style=f"bold {DRACULA_CYAN}")
+    if snapshot.node_name:
+        title.append(" @ ", style=DRACULA_DIM)
+        title.append(snapshot.node_name, style=f"bold {DRACULA_GREEN}")
     timestamp = snapshot.timestamp.strftime("%a %b %d %H:%M:%S %Y")
     details = Text()
     details.append(timestamp, style=DRACULA_FG)

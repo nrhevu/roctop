@@ -47,6 +47,7 @@ class ProcessInfo:
 @dataclass(slots=True)
 class Snapshot:
     timestamp: datetime
+    node_name: str = ""
     driver_version: str = ""
     gpus: list[GpuInfo] = field(default_factory=list)
     processes: list[ProcessInfo] = field(default_factory=list)

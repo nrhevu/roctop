@@ -85,6 +85,7 @@ def build_snapshot() -> object:
 
     return Snapshot(
         timestamp=datetime(2026, 6, 22, 15, 45, 0),
+        node_name="node-a",
         driver_version="6.14.14",
         gpus=[
             GpuInfo(
@@ -199,6 +200,7 @@ def verify_svg(path: Path) -> None:
         "demo::metrics_agent",
         "Sort",
         "%GPU-MEM",
+        "node-a",
     ):
         if expected not in text:
             missing.append(expected)
