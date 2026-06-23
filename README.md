@@ -23,6 +23,16 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 
 ## Install
 
+From GitHub:
+
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install "git+https://github.com/nrhevu/roctop.git"
+export PATH="$PWD/.venv/bin:$PATH"
+```
+
+From a local checkout:
+
 ```bash
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install -e .
