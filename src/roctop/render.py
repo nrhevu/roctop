@@ -45,7 +45,11 @@ DRACULA_SELECTION_FG = DRACULA_FG
 SORT_MENU_SELECTION_BG = DRACULA_CYAN
 SORT_MENU_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
-BRAILLE_DOTS_BY_SUBROW = (0x09, 0x12, 0x24, 0xC0)
+GRAPH_COLUMNS_PER_CELL = 2
+BRAILLE_DOTS_BY_COLUMN = (
+    (0x01, 0x02, 0x04, 0x40),
+    (0x08, 0x10, 0x20, 0x80),
+)
 
 
 @dataclass(slots=True)
@@ -305,11 +309,15 @@ def metric_label(label: str, value: float | None, style: str) -> Text:
 def time_axis_line(width: int) -> Text:
     width = max(1, width)
     chars = ["─"] * width
-    for ratio, label in ((0.18, "120s"), (0.52, "60s"), (0.75, "30s")):
-        if width < len(label) + 2:
+    for seconds, label in ((120, "120s"), (60, "60s"), (30, "30s")):
+        marker = width - 1 - seconds // GRAPH_COLUMNS_PER_CELL
+        start = marker - len(label)
+        space = start - 1
+        if space < 0 or start + len(label) > width:
             continue
-        start = max(0, min(width - len(label), int(width * ratio) - len(label) // 2))
-        chars[start : start + len(label)] = list(label)
+        chars[space] = " "
+        chars[start:marker] = list(label)
+        chars[marker] = "│"
     return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
 
 
@@ -331,19 +339,23 @@ def metric_graph_lines(
 ) -> list[Text]:
     width = max(1, width)
     height = max(1, height)
-    rows_per_line = max(1, min(rows_per_line, len(BRAILLE_DOTS_BY_SUBROW)))
-    recent_values = list(values[-width:])
-    padded_values: list[float | None] = [None] * (width - len(recent_values)) + recent_values
+    rows_per_line = max(1, min(rows_per_line, len(BRAILLE_DOTS_BY_COLUMN[0])))
+    graph_columns = width * GRAPH_COLUMNS_PER_CELL
+    recent_values = list(values[-graph_columns:])
+    padded_values: list[float | None] = [None] * (graph_columns - len(recent_values)) + recent_values
     lines: list[Text] = []
     for line_top_level in range(height, 0, -rows_per_line):
         line = Text(no_wrap=True, overflow="crop")
-        for value in padded_values:
-            filled_rows = graph_filled_rows(value, height)
-            active_mask = braille_graph_mask(
-                filled_rows=filled_rows,
-                line_top_level=line_top_level,
-                rows_per_line=rows_per_line,
-            )
+        for column_start in range(0, len(padded_values), GRAPH_COLUMNS_PER_CELL):
+            active_mask = 0
+            for column, value in enumerate(padded_values[column_start : column_start + GRAPH_COLUMNS_PER_CELL]):
+                filled_rows = graph_filled_rows(value, height)
+                active_mask |= braille_graph_mask(
+                    filled_rows=filled_rows,
+                    line_top_level=line_top_level,
+                    rows_per_line=rows_per_line,
+                    column=column,
+                )
             if invert_dots:
                 active_mask = flip_braille_vertical(active_mask)
             if active_mask:
@@ -363,13 +375,14 @@ def trim_empty_graph_lines(lines: list[Text]) -> list[Text]:
     return lines[first_visible:] or lines[-1:]
 
 
-def braille_graph_mask(filled_rows: int, line_top_level: int, rows_per_line: int) -> int:
+def braille_graph_mask(filled_rows: int, line_top_level: int, rows_per_line: int, column: int) -> int:
     mask = 0
+    dot_masks = BRAILLE_DOTS_BY_COLUMN[column]
     for subrow in range(rows_per_line):
         level = line_top_level - subrow
         if level <= 0:
             continue
-        dot_mask = BRAILLE_DOTS_BY_SUBROW[subrow]
+        dot_mask = dot_masks[subrow]
         if filled_rows >= level:
             mask |= dot_mask
     return mask
@@ -377,11 +390,18 @@ def braille_graph_mask(filled_rows: int, line_top_level: int, rows_per_line: int
 
 def flip_braille_vertical(mask: int) -> int:
     flipped = 0
-    for top_row, bottom_row in ((0x09, 0xC0), (0x12, 0x24)):
-        if mask & top_row:
-            flipped |= bottom_row
-        if mask & bottom_row:
-            flipped |= top_row
+    for source, target in (
+        (0x01, 0x40),
+        (0x02, 0x04),
+        (0x04, 0x02),
+        (0x08, 0x80),
+        (0x10, 0x20),
+        (0x20, 0x10),
+        (0x40, 0x01),
+        (0x80, 0x08),
+    ):
+        if mask & source:
+            flipped |= target
     return flipped
 
 

@@ -148,7 +148,7 @@ class RenderTests(unittest.TestCase):
         narrow_console = Console(width=80, record=True, file=StringIO())
         narrow_console.print(render_snapshot(snapshot, history))
 
-        console = Console(width=180, record=True, file=StringIO())
+        console = Console(width=300, record=True, file=StringIO())
         console.print(render_snapshot(snapshot, history))
         output = console.export_text()
         self.assertIn("Avg %CPU: 37.3%", output)
@@ -182,7 +182,7 @@ class RenderTests(unittest.TestCase):
     def test_low_history_values_draw_visible_trace_on_right(self) -> None:
         lines = metric_graph_lines([None, 5.0, 12.0], width=6, height=15, style="green")
         self.assertEqual(len(lines), 1)
-        self.assertEqual(lines[-1].plain, "    ⠤⠶")
+        self.assertEqual(lines[-1].plain, "     ⠴")
 
     def test_metric_graph_can_flip_dots_inside_braille_cell(self) -> None:
         normal = metric_graph_lines([25.0], width=1, height=4, style="green", trim_empty=False)
@@ -194,8 +194,39 @@ class RenderTests(unittest.TestCase):
             trim_empty=False,
             invert_dots=True,
         )
-        self.assertEqual(normal[0].plain, "⣀")
-        self.assertEqual(inverted[0].plain, "⠉")
+        self.assertEqual(normal[0].plain, "⢀")
+        self.assertEqual(inverted[0].plain, "⠈")
+
+    def test_metric_graph_packs_two_time_columns_per_braille_cell(self) -> None:
+        lines = metric_graph_lines([25.0, 25.0], width=1, height=4, style="green", trim_empty=False)
+        self.assertEqual(lines[0].plain, "⣀")
+
+    def test_time_axis_uses_one_second_offsets(self) -> None:
+        axis = render.time_axis_line(130).plain
+        self.assertEqual(axis.index("120s"), 65)
+        self.assertEqual(axis.index("60s"), 96)
+        self.assertEqual(axis.index("30s"), 111)
+        self.assertEqual(axis[64], " ")
+        self.assertEqual(axis[95], " ")
+        self.assertEqual(axis[110], " ")
+        self.assertEqual(axis[69], "│")
+        self.assertEqual(axis[99], "│")
+        self.assertEqual(axis[114], "│")
+
+    def test_time_axis_crops_old_labels_on_narrow_width(self) -> None:
+        axis = render.time_axis_line(50).plain
+        self.assertNotIn("120s", axis)
+        self.assertEqual(axis.index("60s"), 16)
+        self.assertEqual(axis.index("30s"), 31)
+        self.assertEqual(axis[15], " ")
+        self.assertEqual(axis[30], " ")
+        self.assertEqual(axis[19], "│")
+        self.assertEqual(axis[34], "│")
+
+    def test_time_axis_handles_very_narrow_width(self) -> None:
+        axis = render.time_axis_line(2).plain
+        self.assertEqual(axis, "──")
+        self.assertNotIn("30s", axis)
 
     def test_metric_graph_pair_keeps_axes_and_bottom_labels_aligned(self) -> None:
         history = MetricsHistory(max_samples=120)
@@ -208,7 +239,7 @@ class RenderTests(unittest.TestCase):
                 avg_gpu_mem_percent=55.0,
             )
         )
-        console = Console(width=180, record=True, file=StringIO())
+        console = Console(width=300, record=True, file=StringIO())
         console.print(render_metrics_graphs(history))
         lines = console.export_text().splitlines()
         axis_lines = [index for index, line in enumerate(lines) if "120s" in line]
@@ -233,7 +264,7 @@ class RenderTests(unittest.TestCase):
         console = Console(width=120, record=True, file=StringIO())
         console.print(render_metrics_graphs(history))
         lines = console.export_text().splitlines()
-        axis_index = next(index for index, line in enumerate(lines) if "120s" in line)
+        axis_index = next(index for index, line in enumerate(lines) if "30s" in line)
         bottom_label_index = next(index for index, line in enumerate(lines) if "Avg %MEM:" in line)
         first_bottom_graph_line = lines[axis_index + 1]
         last_bottom_graph_line = lines[bottom_label_index - 1]

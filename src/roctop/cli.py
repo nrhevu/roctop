@@ -34,7 +34,7 @@ from .render import render_snapshot
 
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
-LIVE_CLOCK_MAX_SECONDS = 1.0
+LIVE_RENDER_SECONDS = 1.0
 
 
 @dataclass(slots=True)
@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_live(console: Console, interval: float) -> int:
-    history = MetricsHistory(max_samples=120)
+    history = MetricsHistory(max_samples=121)
     process_state = ProcessViewState()
     snapshot = collect_snapshot_retry(interval)
     history.add_snapshot(snapshot)
@@ -185,25 +185,21 @@ def poll_live_until_quit(
         if update is not None:
             snapshot = update.snapshot
             latest_sequence = update.sequence
-            history.add_snapshot(snapshot)
-            rendered_size = console_dimensions(console)
-            live.update(
-                render_live_snapshot(snapshot, history, process_state, console, interval=interval),
-                refresh=True,
-            )
-            next_render_at = time.monotonic() + render_interval
 
         now = time.monotonic()
         current_size = console_dimensions(console)
         status_expired = process_state.expire_status_message(now)
         refresh_due = now >= next_render_at
+        if refresh_due:
+            history.add_snapshot(snapshot)
         if current_size != rendered_size or status_expired or refresh_due:
             live.update(
                 render_live_snapshot(snapshot, history, process_state, console, interval=interval),
                 refresh=True,
             )
             rendered_size = current_size
-            next_render_at = now + render_interval
+            if refresh_due:
+                next_render_at = now + render_interval
 
         timeout = min(KEY_POLL_SECONDS, max(0.0, next_render_at - time.monotonic()))
         keys = keyboard.read_keys(timeout=timeout)
@@ -223,7 +219,6 @@ def poll_live_until_quit(
             ),
             refresh=True,
         )
-        next_render_at = time.monotonic() + render_interval
         if quit_requested:
             return
 
@@ -331,7 +326,7 @@ def render_live_snapshot(
 
 
 def live_render_interval(interval: float) -> float:
-    return max(KEY_POLL_SECONDS, min(interval, LIVE_CLOCK_MAX_SECONDS))
+    return LIVE_RENDER_SECONDS
 
 
 def console_dimensions(console: Console) -> tuple[int, int]:
