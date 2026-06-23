@@ -6,6 +6,7 @@ from datetime import datetime
 
 from rich.console import Console
 
+import roctop.render as render
 from roctop.history import MetricSample, MetricsHistory
 from roctop.interaction import MODE_KILL_CONFIRM, MODE_SEARCH, ProcessViewState
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
@@ -21,6 +22,17 @@ from roctop.render import (
 
 def has_braille_dots(text: str) -> bool:
     return any("\u2801" <= char <= "\u28ff" for char in text)
+
+
+def synthetic_long_processes(count: int) -> list[ProcessInfo]:
+    command = (
+        "demo_worker --model-path /demo/models/example-checkpoint "
+        "--tensor-parallel-size 8 --batch-size 64 --sequence-length 8192 --final-flag"
+    )
+    return [
+        ProcessInfo(gpu_index=index % 8, pid=1000 + index, user="demo", args=f"{command} --rank {index}")
+        for index in range(count)
+    ]
 
 
 class RenderTests(unittest.TestCase):
@@ -576,6 +588,55 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("200", output)
         self.assertLessEqual(max(len(line) for line in lines), 120)
         self.assertLessEqual(len(lines), 18)
+
+    def test_process_window_keeps_selected_row_visible_near_top_middle_and_bottom(self) -> None:
+        processes = synthetic_long_processes(300)
+        command_width = render.estimate_process_command_width(120)
+
+        for selected_index in (0, 150, 299):
+            with self.subTest(selected_index=selected_index):
+                state = ProcessViewState(selected_pid=processes[selected_index].pid, viewport_rows=8)
+                state.sync(processes, viewport_rows=8)
+
+                rows = render.visible_process_window(processes, state, max_visual_rows=8, command_width=command_width)
+
+                visible_pids = [row.process.pid for row in rows]
+                self.assertIn(processes[selected_index].pid, visible_pids)
+                self.assertLessEqual(sum(row.visual_height for row in rows), 8)
+                if selected_index == 0:
+                    self.assertEqual(visible_pids[0], processes[0].pid)
+                if selected_index == len(processes) - 1:
+                    self.assertEqual(visible_pids[-1], processes[-1].pid)
+
+    def test_process_render_wraps_visible_window_not_every_process(self) -> None:
+        processes = synthetic_long_processes(400)
+        state = ProcessViewState(selected_pid=processes[200].pid, viewport_rows=10)
+        original_wrap_command_lines = render.wrap_command_lines
+        wrap_calls = 0
+
+        def counting_wrap_command_lines(command: str, width: int) -> list[str]:
+            nonlocal wrap_calls
+            wrap_calls += 1
+            return original_wrap_command_lines(command, width)
+
+        try:
+            render.wrap_command_lines = counting_wrap_command_lines
+            console = Console(width=120, record=True, file=StringIO())
+            console.print(
+                render_process_table(
+                    processes,
+                    process_state=state,
+                    max_rows=10,
+                    terminal_width=120,
+                )
+            )
+        finally:
+            render.wrap_command_lines = original_wrap_command_lines
+
+        output = console.export_text()
+        self.assertIn(str(processes[200].pid), output)
+        self.assertLessEqual(wrap_calls, 8)
+        self.assertLess(wrap_calls, len(processes) // 10)
 
 
 if __name__ == "__main__":

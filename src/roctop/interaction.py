@@ -143,6 +143,11 @@ class ProcessViewState:
             return None
         return processes[self.selected_index]
 
+    def selected_synced_process(self, processes: list[ProcessInfo]) -> ProcessInfo | None:
+        if not processes:
+            return None
+        return processes[self.selected_index]
+
     def selected_visible_index(self) -> int | None:
         if self.selected_pid is None:
             return None
@@ -156,21 +161,23 @@ class ProcessViewState:
         key: str,
         processes: list[ProcessInfo],
         kill_func: Callable[[int, signal.Signals], None] = None,
+        processes_synced: bool = False,
     ) -> KeyResult:
         kill_func = kill_func or kill_process
-        self.sync(processes)
+        if not processes_synced:
+            self.sync(processes)
 
         if key == KEY_CTRL_C:
             return KeyResult(quit=True, changed=True)
 
         if self.mode == MODE_KILL_CONFIRM:
-            return self.handle_kill_confirm_key(key, processes, kill_func)
+            return self.handle_kill_confirm_key(key, processes, kill_func, processes_synced=True)
 
         if self.mode == MODE_SORT_MENU:
             return self.handle_sort_menu_key(key)
 
         if self.mode == MODE_SEARCH:
-            return self.handle_search_key(key, processes)
+            return self.handle_search_key(key, processes, processes_synced=True)
 
         if key == "q":
             return KeyResult(quit=True, changed=True)
@@ -197,13 +204,13 @@ class ProcessViewState:
             self.clear_status_message()
             return KeyResult(changed=True)
         if key == "n":
-            self.search_next(processes, direction=1)
+            self.search_next(processes, direction=1, processes_synced=True)
             return KeyResult(changed=True)
         if key == "N":
-            self.search_next(processes, direction=-1)
+            self.search_next(processes, direction=-1, processes_synced=True)
             return KeyResult(changed=True)
         if key == "x":
-            selected = self.selected_process(processes)
+            selected = self.selected_synced_process(processes)
             if selected is None:
                 self.set_status_message("No process selected")
             else:
@@ -213,7 +220,12 @@ class ProcessViewState:
             return KeyResult(changed=True)
         return KeyResult()
 
-    def handle_search_key(self, key: str, processes: list[ProcessInfo]) -> KeyResult:
+    def handle_search_key(
+        self,
+        key: str,
+        processes: list[ProcessInfo],
+        processes_synced: bool = False,
+    ) -> KeyResult:
         if key == KEY_ESC:
             self.mode = MODE_NORMAL
             self.search_input = ""
@@ -224,7 +236,7 @@ class ProcessViewState:
             self.mode = MODE_NORMAL
             self.search_input = ""
             self.search_query = query
-            self.search_next(processes, direction=1)
+            self.search_next(processes, direction=1, processes_synced=processes_synced)
             return KeyResult(changed=True)
         if key == KEY_BACKSPACE:
             self.search_input = self.search_input[:-1]
@@ -239,6 +251,7 @@ class ProcessViewState:
         key: str,
         processes: list[ProcessInfo],
         kill_func: Callable[[int, signal.Signals], None],
+        processes_synced: bool = False,
     ) -> KeyResult:
         if key in ("j", KEY_DOWN, KEY_LEFT):
             self.kill_confirm_index = max(0, self.kill_confirm_index - 1)
@@ -263,7 +276,7 @@ class ProcessViewState:
 
         option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
         kill_signal = KILL_CONFIRM_SIGNALS[option]
-        selected = self.selected_process(processes)
+        selected = self.selected_synced_process(processes) if processes_synced else self.selected_process(processes)
         self.mode = MODE_NORMAL
         if selected is None:
             self.set_status_message("No process selected")
@@ -311,12 +324,12 @@ class ProcessViewState:
         self.selected_pid = processes[self.selected_index].pid
         self.ensure_selected_visible(len(processes))
 
-    def search_next(self, processes: list[ProcessInfo], direction: int) -> bool:
+    def search_next(self, processes: list[ProcessInfo], direction: int, processes_synced: bool = False) -> bool:
         query = self.search_query.strip()
         if not query:
             self.set_status_message("No search query")
             return False
-        match_index = self.search_match_index(processes, query, direction)
+        match_index = self.search_match_index(processes, query, direction, processes_synced=processes_synced)
         if match_index is None:
             self.set_status_message(f"No matches for: {query}")
             return False
@@ -326,10 +339,17 @@ class ProcessViewState:
         self.set_status_message(f"Search: {query}")
         return True
 
-    def search_match_index(self, processes: list[ProcessInfo], query: str, direction: int) -> int | None:
+    def search_match_index(
+        self,
+        processes: list[ProcessInfo],
+        query: str,
+        direction: int,
+        processes_synced: bool = False,
+    ) -> int | None:
         if not processes:
             return None
-        self.sync(processes)
+        if not processes_synced:
+            self.sync(processes)
         step = 1 if direction >= 0 else -1
         start = self.selected_index
         for offset in range(1, len(processes) + 1):

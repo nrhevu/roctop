@@ -25,6 +25,7 @@ from .interaction import (
     ProcessViewState,
 )
 from .models import GpuInfo, ProcessInfo, Snapshot
+from .profiling import profile_span
 
 DRACULA_GREEN = "#50fa7b"
 DRACULA_YELLOW = "#f1fa8c"
@@ -45,34 +46,44 @@ GRAPH_ROWS_PER_LINE = 4
 BRAILLE_DOTS_BY_SUBROW = (0x09, 0x12, 0x24, 0xC0)
 
 
+@dataclass(slots=True)
+class ProcessRenderRow:
+    process: ProcessInfo
+    command: str
+    visual_height: int
+
+
 def render_snapshot(
     snapshot: Snapshot,
     history: MetricsHistory | None = None,
     process_state: ProcessViewState | None = None,
     terminal_height: int | None = None,
     terminal_width: int | None = None,
+    display_processes: list[ProcessInfo] | None = None,
 ) -> Group:
-    gpu_table = render_gpu_table(snapshot.gpus)
-    process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state) if process_state else None
-    process_table = render_process_table(
-        snapshot.processes,
-        process_state=process_state,
-        max_rows=process_rows,
-        terminal_width=terminal_width,
-    )
-    header = render_header(
-        snapshot,
-        process_state=process_state,
-        process_count=len(snapshot.processes),
-    )
-    parts = [header, gpu_table]
-    if history is not None:
-        parts.append(render_metrics_graphs(history))
-    parts.append(process_table)
-    visible_warnings = ui_warnings(snapshot.warnings)
-    if visible_warnings:
-        parts.append(render_warnings(visible_warnings))
-    return Group(*parts)
+    with profile_span("render"):
+        gpu_table = render_gpu_table(snapshot.gpus)
+        process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state) if process_state else None
+        process_table = render_process_table(
+            display_processes if display_processes is not None else snapshot.processes,
+            process_state=process_state,
+            max_rows=process_rows,
+            terminal_width=terminal_width,
+            processes_sorted=display_processes is not None,
+        )
+        header = render_header(
+            snapshot,
+            process_state=process_state,
+            process_count=len(snapshot.processes),
+        )
+        parts = [header, gpu_table]
+        if history is not None:
+            parts.append(render_metrics_graphs(history))
+        parts.append(process_table)
+        visible_warnings = ui_warnings(snapshot.warnings)
+        if visible_warnings:
+            parts.append(render_warnings(visible_warnings))
+        return Group(*parts)
 
 
 def estimate_process_view_rows(
@@ -379,15 +390,20 @@ def render_process_table(
     process_state: ProcessViewState | None = None,
     max_rows: int | None = None,
     terminal_width: int | None = None,
+    processes_sorted: bool = False,
 ) -> Table:
     display_processes = list(processes)
+    display_rows: list[ProcessRenderRow]
     title = None
     command_width = estimate_process_command_width(terminal_width)
     if process_state is not None:
-        display_processes = process_state.sorted_processes(display_processes)
-        process_state.sync(display_processes)
+        if not processes_sorted:
+            display_processes = process_state.sorted_processes(display_processes)
+        process_state.sync(display_processes, viewport_rows=max_rows)
         title = render_process_title(process_state, len(display_processes))
-        display_processes = visible_process_window(display_processes, process_state, max_rows, command_width)
+        display_rows = visible_process_window(display_processes, process_state, max_rows, command_width)
+    else:
+        display_rows = [ProcessRenderRow(proc, process_command(proc), 1) for proc in display_processes]
 
     table = Table(
         box=box.SQUARE,
@@ -412,16 +428,15 @@ def render_process_table(
         min_width=12,
     )
 
-    if not display_processes:
+    if not display_rows:
         table.add_row("-", "-", "-", "-", "-", "-", "-", "-", "No GPU processes found")
         return table
 
     selected_pid = process_state.selected_pid if process_state is not None else None
-    for proc in display_processes:
+    for row in display_rows:
+        proc = row.process
         gpu = "-" if proc.gpu_index is None else str(proc.gpu_index)
-        command = proc.args or proc.command or proc.name or "N/A"
-        if process_state is not None:
-            command = wrap_process_command(command, command_width)
+        command = row.command
         gpu_mem_style = percent_style(proc.gpu_memory_percent)
         table.add_row(
             gpu,
@@ -521,33 +536,51 @@ def visible_process_window(
     process_state: ProcessViewState,
     max_visual_rows: int | None,
     command_width: int,
-) -> list[ProcessInfo]:
+) -> list[ProcessRenderRow]:
     if not processes:
-        process_state.sync(processes)
+        process_state.scroll_offset = 0
         return []
-    selected_index = max(0, min(process_state.selected_index, len(processes) - 1))
-    max_visual_rows = max(1, max_visual_rows or process_state.viewport_rows)
-    row_heights = [process_visual_height(proc, command_width) for proc in processes]
 
-    start = selected_index
-    end = selected_index + 1
-    used_rows = row_heights[selected_index]
+    with profile_span("process-window"):
+        selected_index = max(0, min(process_state.selected_index, len(processes) - 1))
+        max_visual_rows = max(1, max_visual_rows or process_state.viewport_rows)
+        wrapped_rows: dict[int, ProcessRenderRow] = {}
 
-    while start > 0 and used_rows + row_heights[start - 1] <= max_visual_rows:
-        start -= 1
-        used_rows += row_heights[start]
-    while end < len(processes) and used_rows + row_heights[end] <= max_visual_rows:
-        used_rows += row_heights[end]
-        end += 1
+        def row_at(index: int) -> ProcessRenderRow:
+            row = wrapped_rows.get(index)
+            if row is None:
+                row = wrapped_process_row(processes[index], command_width)
+                wrapped_rows[index] = row
+            return row
 
-    process_state.scroll_offset = start
-    process_state.viewport_rows = max(1, end - start)
-    return processes[start:end]
+        start = selected_index
+        end = selected_index + 1
+        used_rows = row_at(selected_index).visual_height
+
+        while start > 0:
+            row = row_at(start - 1)
+            if used_rows + row.visual_height > max_visual_rows:
+                break
+            start -= 1
+            used_rows += row.visual_height
+        while end < len(processes):
+            row = row_at(end)
+            if used_rows + row.visual_height > max_visual_rows:
+                break
+            used_rows += row.visual_height
+            end += 1
+
+        process_state.scroll_offset = start
+        return [row_at(index) for index in range(start, end)]
 
 
-def process_visual_height(proc: ProcessInfo, command_width: int) -> int:
-    command = proc.args or proc.command or proc.name or "N/A"
-    return max(1, len(wrap_command_lines(command, command_width)))
+def process_command(proc: ProcessInfo) -> str:
+    return proc.args or proc.command or proc.name or "N/A"
+
+
+def wrapped_process_row(proc: ProcessInfo, command_width: int) -> ProcessRenderRow:
+    command = wrap_process_command(process_command(proc), command_width)
+    return ProcessRenderRow(proc, command, max(1, command.count("\n") + 1))
 
 
 def estimate_process_command_width(terminal_width: int | None) -> int:

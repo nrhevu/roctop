@@ -21,6 +21,10 @@ from roctop.models import ProcessInfo
 
 
 class CollectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        collectors._amd_smi_process_backoff_until = 0.0
+        collectors._ps_row_cache.clear()
+
     def test_load_json_from_text_skips_warning_prefix(self) -> None:
         data = load_json_from_text('WARNING: noisy\n{"ok": true}')
         self.assertEqual(data, {"ok": True})
@@ -64,6 +68,87 @@ class CollectorTests(unittest.TestCase):
             snapshot = collect_snapshot()
 
         self.assertEqual(snapshot.node_name, "node-a")
+
+    def test_amd_smi_process_timeout_falls_back_to_rocm_smi_process_rows(self) -> None:
+        calls: list[tuple[list[str], float | None]] = []
+
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            calls.append((args, timeout))
+            if args[0] == "rocm-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout='{"system": {"PID42": "demo-worker, 0, 1048576, 0, 0"}}',
+                    stderr="",
+                )
+            if args[0] == "amd-smi":
+                raise CommandTimeout("Command timed out: amd-smi process")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            snapshot = collect_snapshot()
+
+        self.assertEqual([proc.pid for proc in snapshot.processes], [42])
+        self.assertEqual(snapshot.processes[0].command, "demo-worker")
+        amd_calls = [(args, timeout) for args, timeout in calls if args[0] == "amd-smi"]
+        self.assertEqual(len(amd_calls), 1)
+        self.assertEqual(amd_calls[0][1], collectors.AMD_SMI_PROCESS_TIMEOUT_SECONDS)
+
+    def test_amd_smi_process_backoff_skips_optional_command_during_cooldown(self) -> None:
+        amd_calls = 0
+
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            nonlocal amd_calls
+            if args[0] == "rocm-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout='{"system": {"PID42": "demo-worker, 0, 1048576, 0, 0"}}',
+                    stderr="",
+                )
+            if args[0] == "amd-smi":
+                amd_calls += 1
+                raise CommandTimeout("Command timed out: amd-smi process")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            first = collect_snapshot()
+            second = collect_snapshot()
+
+        self.assertEqual([proc.pid for proc in first.processes], [42])
+        self.assertEqual([proc.pid for proc in second.processes], [42])
+        self.assertEqual(amd_calls, 1)
+
+    def test_ps_enrichment_cache_reuses_rows_within_ttl_and_refreshes_after_expiry(self) -> None:
+        calls: list[list[int]] = []
+
+        def fake_read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
+            calls.append(list(pids))
+            suffix = str(len(calls))
+            return {
+                pid: {
+                    "user": f"demo{suffix}",
+                    "cpu": suffix,
+                    "mem": suffix,
+                    "etime": "00:01",
+                    "comm": "python",
+                    "args": f"python worker-{suffix}.py",
+                }
+                for pid in pids
+            }
+
+        with (
+            patch("roctop.collectors.read_ps_rows", side_effect=fake_read_ps_rows),
+            patch("roctop.collectors.time.monotonic", side_effect=[100.0, 101.0, 103.1]),
+        ):
+            first = collectors.read_ps_rows_cached([42])
+            second = collectors.read_ps_rows_cached([42])
+            third = collectors.read_ps_rows_cached([42])
+
+        self.assertEqual(calls, [[42], [42]])
+        self.assertEqual(first[42]["user"], "demo1")
+        self.assertEqual(second[42]["user"], "demo1")
+        self.assertEqual(third[42]["user"], "demo2")
 
     def test_parse_rocm_smi_json(self) -> None:
         raw = {

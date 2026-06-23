@@ -6,6 +6,7 @@ import platform
 import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -14,6 +15,7 @@ from typing import Any
 
 from .formatting import clamp_percent, parse_int, parse_number
 from .models import GpuInfo, ProcessInfo, Snapshot
+from .profiling import profile_span
 
 
 ROCM_SMI_ARGS = [
@@ -33,6 +35,10 @@ ROCM_SMI_ARGS = [
 
 AMD_SMI_PROCESS_ARGS = ["amd-smi", "process", "-G", "--json"]
 ROCM_SMI_TIMEOUT_SECONDS = 15.0
+AMD_SMI_PROCESS_TIMEOUT_SECONDS = 1.5
+AMD_SMI_PROCESS_BACKOFF_SECONDS = 10.0
+PS_TIMEOUT_SECONDS = 1.0
+PS_CACHE_TTL_SECONDS = 2.0
 AMD_PCI_VENDOR_ID = "1002"
 PCI_IDS_PATHS = (
     Path("/usr/share/misc/pci.ids"),
@@ -82,6 +88,9 @@ INSTINCT_SERIES_BY_PREFIX = {
     "355": "AMD Instinct MI350 Series",
 }
 
+_amd_smi_process_backoff_until = 0.0
+_ps_row_cache: dict[int, tuple[float, dict[str, str]]] = {}
+
 
 @dataclass(slots=True)
 class CommandResult:
@@ -126,6 +135,11 @@ def run_command(args: list[str], timeout: float = 5.0) -> CommandResult:
 
 
 def collect_snapshot(now: datetime | None = None) -> Snapshot:
+    with profile_span("collection"):
+        return _collect_snapshot(now)
+
+
+def _collect_snapshot(now: datetime | None = None) -> Snapshot:
     now = now or datetime.now()
     warnings: list[str] = []
 
@@ -140,17 +154,22 @@ def collect_snapshot(now: datetime | None = None) -> Snapshot:
     gpus, rocm_processes, driver_version = parse_rocm_smi_json(rocm_data)
 
     process_rows: list[ProcessInfo] = []
-    try:
-        amd_result = run_command(AMD_SMI_PROCESS_ARGS)
-        warnings.extend(_warnings_from_result(amd_result))
-        if command_was_interrupted(amd_result):
-            raise CommandInterrupted(_command_failure_message(amd_result))
-        if amd_result.returncode == 0 and amd_result.stdout.strip():
-            process_rows = parse_amd_smi_process_json(load_json_from_text(amd_result.stdout), gpus)
-    except CommandTimeout:
-        pass
-    except (CollectionError, json.JSONDecodeError, ValueError) as exc:
-        warnings.append(f"amd-smi process unavailable: {exc}")
+    if should_run_amd_smi_process():
+        try:
+            amd_result = run_command(AMD_SMI_PROCESS_ARGS, timeout=AMD_SMI_PROCESS_TIMEOUT_SECONDS)
+            warnings.extend(_warnings_from_result(amd_result))
+            if command_was_interrupted(amd_result):
+                raise CommandInterrupted(_command_failure_message(amd_result))
+            if amd_result.returncode != 0:
+                raise CollectionError(_command_failure_message(amd_result))
+            if amd_result.stdout.strip():
+                process_rows = parse_amd_smi_process_json(load_json_from_text(amd_result.stdout), gpus)
+            record_amd_smi_process_success()
+        except CommandTimeout:
+            record_amd_smi_process_failure()
+        except (CollectionError, json.JSONDecodeError, ValueError) as exc:
+            record_amd_smi_process_failure()
+            warnings.append(f"amd-smi process unavailable: {exc}")
 
     if not process_rows:
         process_rows = rocm_processes
@@ -174,6 +193,20 @@ def collect_snapshot(now: datetime | None = None) -> Snapshot:
         ),
         warnings=dedupe_preserving_order(warnings),
     )
+
+
+def should_run_amd_smi_process() -> bool:
+    return time.monotonic() >= _amd_smi_process_backoff_until
+
+
+def record_amd_smi_process_failure() -> None:
+    global _amd_smi_process_backoff_until
+    _amd_smi_process_backoff_until = time.monotonic() + AMD_SMI_PROCESS_BACKOFF_SECONDS
+
+
+def record_amd_smi_process_success() -> None:
+    global _amd_smi_process_backoff_until
+    _amd_smi_process_backoff_until = 0.0
 
 
 def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[ProcessInfo], str]:
@@ -347,7 +380,7 @@ def enrich_processes_with_ps(processes: list[ProcessInfo]) -> None:
     if not processes:
         return
     pid_list = sorted({proc.pid for proc in processes})
-    ps_rows = read_ps_rows(pid_list)
+    ps_rows = read_ps_rows_cached(pid_list)
     for proc in processes:
         row = ps_rows.get(proc.pid)
         if not row:
@@ -362,6 +395,30 @@ def enrich_processes_with_ps(processes: list[ProcessInfo]) -> None:
             proc.name = proc.command
 
 
+def read_ps_rows_cached(pids: list[int]) -> dict[int, dict[str, str]]:
+    if not pids:
+        return {}
+
+    now = time.monotonic()
+    rows: dict[int, dict[str, str]] = {}
+    missing_pids: list[int] = []
+    for pid in pids:
+        cached = _ps_row_cache.get(pid)
+        if cached is not None and now - cached[0] < PS_CACHE_TTL_SECONDS:
+            rows[pid] = cached[1]
+            continue
+        _ps_row_cache.pop(pid, None)
+        missing_pids.append(pid)
+
+    if missing_pids:
+        fresh_rows = read_ps_rows(missing_pids)
+        for pid, row in fresh_rows.items():
+            _ps_row_cache[pid] = (now, row)
+            rows[pid] = row
+
+    return rows
+
+
 def read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
     if not pids:
         return {}
@@ -373,7 +430,7 @@ def read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
         ",".join(str(pid) for pid in pids),
     ]
     try:
-        result = run_command(args, timeout=3.0)
+        result = run_command(args, timeout=PS_TIMEOUT_SECONDS)
     except CollectionError:
         return {}
     if result.returncode != 0:
