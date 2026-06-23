@@ -229,7 +229,7 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
                 style=mem_style,
             ),
             bar_with_percent(gpu.memory_percent, mem_style, digits=1),
-            bar_with_percent(gpu.utilization_percent, util_style),
+            bar_with_percent(gpu.utilization_percent, util_style, digits=1),
         ]
         table.add_row(*row)
     return table

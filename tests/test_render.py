@@ -103,6 +103,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("%Memory-Usage", output)
         self.assertIn("%Utilization", output)
         self.assertIn("25.0%", output)
+        self.assertIn("42.0%", output)
         self.assertIn("42%", output)
         self.assertNotIn("UTL", output)
         self.assertNotIn("GPU-Util", output)
