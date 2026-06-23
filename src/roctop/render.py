@@ -140,11 +140,8 @@ def render_header(
 
 
 def append_process_help(details: Text) -> None:
-    append_keybinding(details, "j/k", "move", leading_space=False)
-    append_keybinding(details, "PgUp/PgDn", "scroll")
-    append_keybinding(details, "s", "sort")
+    append_keybinding(details, "s", "sort", leading_space=False)
     append_keybinding(details, "/", "search")
-    append_keybinding(details, "n/N", "next/prev")
     append_keybinding(details, "x", "kill")
     append_keybinding(details, "q", "quit")
 

@@ -332,7 +332,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("j/k move", plain)
         self.assertIn("48;2;68;71;90", styled)
 
-    def test_process_help_renders_on_second_header_line_with_key_labels(self) -> None:
+    def test_process_help_renders_action_keys_without_navigation_hints(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
             processes=[
@@ -349,14 +349,14 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Sort:", plain)
         self.assertIn("Processes  2/2", plain)
         self.assertNotIn("sort: default", plain)
-        self.assertIn("j/k: move", plain)
-        self.assertIn("PgUp/PgDn: scroll", plain)
+        self.assertNotIn("j/k: move", plain)
+        self.assertNotIn("PgUp/PgDn: scroll", plain)
+        self.assertNotIn("n/N: next/prev", plain)
         self.assertIn("s: sort", plain)
         self.assertIn("/: search", plain)
-        self.assertIn("n/N: next/prev", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("q: quit", plain)
-        self.assertLess(plain.index("Mon Jun 22"), plain.index("j/k: move"))
+        self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
         self.assertIn("38;2;255;184;108", styled)
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
