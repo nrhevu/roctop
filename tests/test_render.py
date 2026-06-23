@@ -745,6 +745,37 @@ class RenderTests(unittest.TestCase):
         self.assertLessEqual(max(len(line) for line in lines), 120)
         self.assertLessEqual(len(lines), 18)
 
+    def test_selected_process_command_truncates_to_visual_budget(self) -> None:
+        process = ProcessInfo(
+            gpu_index=0,
+            pid=404,
+            user="demo",
+            args=" ".join(f"--very-long-option-{index}=demo-value" for index in range(30)),
+        )
+        state = ProcessViewState(selected_pid=404, viewport_rows=3)
+        state.sync([process], viewport_rows=3)
+
+        rows = render.visible_process_window([process], state, max_visual_rows=3, command_width=24)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].visual_height, 3)
+        self.assertEqual(rows[0].command.count("\n"), 2)
+        self.assertTrue(rows[0].command.endswith("..."))
+
+    def test_static_process_command_truncates_when_row_limited(self) -> None:
+        process = ProcessInfo(
+            gpu_index=0,
+            pid=405,
+            user="demo",
+            args=" ".join(f"--very-long-option-{index}=demo-value" for index in range(30)),
+        )
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render_process_table([process], max_rows=1, terminal_width=120))
+
+        output = console.export_text()
+        self.assertIn("...", output)
+        self.assertNotIn("--very-long-option-29", output)
+
     def test_process_window_keeps_selected_row_visible_near_top_middle_and_bottom(self) -> None:
         processes = synthetic_long_processes(300)
         command_width = render.estimate_process_command_width(120)

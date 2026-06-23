@@ -440,7 +440,10 @@ def render_process_table(
         if max_rows is not None and len(display_processes) > max_rows:
             display_processes = display_processes[: max(1, max_rows)]
             title = render_static_process_title(len(display_processes), process_count)
-        display_rows = [ProcessRenderRow(proc, process_command(proc), 1) for proc in display_processes]
+        if max_rows is None:
+            display_rows = [ProcessRenderRow(proc, process_command(proc), 1) for proc in display_processes]
+        else:
+            display_rows = [wrapped_process_row(proc, command_width, max_lines=1) for proc in display_processes]
 
     table = Table(
         box=box.SQUARE,
@@ -606,7 +609,7 @@ def visible_process_window(
         def row_at(index: int) -> ProcessRenderRow:
             row = wrapped_rows.get(index)
             if row is None:
-                row = wrapped_process_row(processes[index], command_width)
+                row = wrapped_process_row(processes[index], command_width, max_lines=max_visual_rows)
                 wrapped_rows[index] = row
             return row
 
@@ -635,8 +638,8 @@ def process_command(proc: ProcessInfo) -> str:
     return proc.args or proc.command or proc.name or "N/A"
 
 
-def wrapped_process_row(proc: ProcessInfo, command_width: int) -> ProcessRenderRow:
-    command = wrap_process_command(process_command(proc), command_width)
+def wrapped_process_row(proc: ProcessInfo, command_width: int, max_lines: int | None = None) -> ProcessRenderRow:
+    command = wrap_process_command(process_command(proc), command_width, max_lines)
     return ProcessRenderRow(proc, command, max(1, command.count("\n") + 1))
 
 
@@ -646,8 +649,11 @@ def estimate_process_command_width(terminal_width: int | None) -> int:
     return max(18, terminal_width - 82)
 
 
-def wrap_process_command(command: str, width: int) -> str:
-    return "\n".join(wrap_command_lines(command, width))
+def wrap_process_command(command: str, width: int, max_lines: int | None = None) -> str:
+    lines = wrap_command_lines(command, width)
+    if max_lines is not None:
+        lines = truncate_command_lines(lines, width, max_lines)
+    return "\n".join(lines)
 
 
 def wrap_command_lines(command: str, width: int) -> list[str]:
@@ -663,6 +669,22 @@ def wrap_command_lines(command: str, width: int) -> list[str]:
         )
         lines.extend(wrapped or [""])
     return lines or [""]
+
+
+def truncate_command_lines(lines: list[str], width: int, max_lines: int) -> list[str]:
+    max_lines = max(1, max_lines)
+    if len(lines) <= max_lines:
+        return lines
+    visible_lines = list(lines[:max_lines])
+    visible_lines[-1] = ellipsize_command_line(visible_lines[-1], width)
+    return visible_lines
+
+
+def ellipsize_command_line(line: str, width: int) -> str:
+    width = max(1, width)
+    if width <= 3:
+        return "." * width
+    return f"{line[: width - 3].rstrip()}..."
 
 
 def metric_text(value: float | int | None, digits: int = 1) -> Text:
