@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_live(console: Console, interval: float) -> int:
-    history = MetricsHistory(max_samples=121)
+    history = MetricsHistory(max_samples=1081)
     process_state = ProcessViewState()
     snapshot = collect_snapshot_retry(interval)
     history.add_snapshot(snapshot)

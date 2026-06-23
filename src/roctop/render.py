@@ -309,7 +309,15 @@ def metric_label(label: str, value: float | None, style: str) -> Text:
 def time_axis_line(width: int) -> Text:
     width = max(1, width)
     chars = ["─"] * width
-    for seconds, label in ((120, "120s"), (60, "60s"), (30, "30s")):
+    for seconds, label in (
+        (1080, "1080s"),
+        (720, "720s"),
+        (360, "360s"),
+        (240, "240s"),
+        (120, "120s"),
+        (60, "60s"),
+        (30, "30s"),
+    ):
         marker = width - 1 - seconds // GRAPH_COLUMNS_PER_CELL
         start = marker - len(label)
         space = start - 1

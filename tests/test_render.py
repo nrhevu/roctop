@@ -213,6 +213,23 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(axis[99], "│")
         self.assertEqual(axis[114], "│")
 
+    def test_time_axis_adds_long_window_markers(self) -> None:
+        axis = render.time_axis_line(550).plain
+        self.assertEqual(axis[3:10], " 1080s│")
+        self.assertEqual(axis[184:190], " 720s│")
+        self.assertEqual(axis[364:370], " 360s│")
+        self.assertEqual(axis[424:430], " 240s│")
+        self.assertEqual(axis[484:490], " 120s│")
+        self.assertEqual(axis[515:520], " 60s│")
+        self.assertEqual(axis[530:535], " 30s│")
+        self.assertEqual(axis[9], "│")
+        self.assertEqual(axis[189], "│")
+        self.assertEqual(axis[369], "│")
+        self.assertEqual(axis[429], "│")
+        self.assertEqual(axis[489], "│")
+        self.assertEqual(axis[519], "│")
+        self.assertEqual(axis[534], "│")
+
     def test_time_axis_crops_old_labels_on_narrow_width(self) -> None:
         axis = render.time_axis_line(50).plain
         self.assertNotIn("120s", axis)
