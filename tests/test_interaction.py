@@ -75,7 +75,7 @@ class InteractionTests(unittest.TestCase):
         state.handle_key("s", processes)
         self.assertEqual(state.mode, MODE_SORT_MENU)
         for _ in range(3):
-            state.handle_key("k", processes)
+            state.handle_key("l", processes)
         state.handle_key(KEY_ENTER, processes)
         self.assertEqual(state.mode, MODE_NORMAL)
         self.assertEqual(state.sort_field, "cpu")
@@ -87,18 +87,32 @@ class InteractionTests(unittest.TestCase):
         self.assertFalse(state.sort_desc)
         self.assertEqual([row.pid for row in state.sorted_processes(processes)], [1, 3, 2])
 
-    def test_sort_menu_uses_down_left_for_left_and_up_right_for_right(self) -> None:
+    def test_sort_menu_uses_down_right_for_right_and_up_left_for_left(self) -> None:
         processes = [proc(1)]
         state = ProcessViewState(viewport_rows=3)
         state.handle_key("s", processes)
         self.assertEqual(state.sort_menu_index, 0)
-        state.handle_key(KEY_UP, processes)
+        state.handle_key(KEY_DOWN, processes)
         self.assertEqual(state.sort_menu_index, 1)
         state.handle_key(KEY_RIGHT, processes)
         self.assertEqual(state.sort_menu_index, 2)
-        state.handle_key(KEY_DOWN, processes)
+        state.handle_key(KEY_UP, processes)
         self.assertEqual(state.sort_menu_index, 1)
         state.handle_key(KEY_LEFT, processes)
+        self.assertEqual(state.sort_menu_index, 0)
+
+    def test_sort_menu_uses_h_l_for_left_right(self) -> None:
+        processes = [proc(1)]
+        state = ProcessViewState(viewport_rows=3)
+        state.handle_key("s", processes)
+
+        state.handle_key("l", processes)
+        self.assertEqual(state.sort_menu_index, 1)
+        state.handle_key("l", processes)
+        self.assertEqual(state.sort_menu_index, 2)
+        state.handle_key("h", processes)
+        self.assertEqual(state.sort_menu_index, 1)
+        state.handle_key("h", processes)
         self.assertEqual(state.sort_menu_index, 0)
 
     def test_cursor_tracks_selected_pid_after_sort_refresh(self) -> None:
@@ -235,6 +249,36 @@ class InteractionTests(unittest.TestCase):
         state.handle_key(KEY_ENTER, processes, kill_func=record)
         self.assertEqual(calls[-1], (42, signal.SIGKILL))
         self.assertIn("Sent SIGKILL", state.status_message)
+
+    def test_kill_confirm_uses_h_l_for_left_right(self) -> None:
+        processes = [proc(42)]
+        state = ProcessViewState(viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("x", processes)
+        state.handle_key("l", processes)
+        self.assertEqual(state.kill_confirm_index, 1)
+        state.handle_key("l", processes)
+        self.assertEqual(state.kill_confirm_index, 2)
+        state.handle_key("h", processes)
+        self.assertEqual(state.kill_confirm_index, 1)
+        state.handle_key("h", processes)
+        self.assertEqual(state.kill_confirm_index, 0)
+
+    def test_kill_confirm_uses_down_right_and_up_left(self) -> None:
+        processes = [proc(42)]
+        state = ProcessViewState(viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("x", processes)
+        state.handle_key(KEY_DOWN, processes)
+        self.assertEqual(state.kill_confirm_index, 1)
+        state.handle_key(KEY_DOWN, processes)
+        self.assertEqual(state.kill_confirm_index, 2)
+        state.handle_key(KEY_UP, processes)
+        self.assertEqual(state.kill_confirm_index, 1)
+        state.handle_key(KEY_UP, processes)
+        self.assertEqual(state.kill_confirm_index, 0)
 
     def test_kill_errors_become_status_messages(self) -> None:
         processes = [proc(42)]

@@ -247,7 +247,7 @@ class CliTests(unittest.TestCase):
 
         class FakeKeyboard:
             def read_keys(self, timeout: float):
-                return ["s", KEY_UP, KEY_UP, KEY_UP, KEY_ENTER, KEY_UP, "q"]
+                return ["s", KEY_DOWN, KEY_DOWN, KEY_DOWN, KEY_ENTER, KEY_UP, "q"]
 
         class FakeLive:
             def __init__(self) -> None:

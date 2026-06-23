@@ -253,10 +253,10 @@ class ProcessViewState:
         kill_func: Callable[[int, signal.Signals], None],
         processes_synced: bool = False,
     ) -> KeyResult:
-        if key in ("j", KEY_DOWN, KEY_LEFT):
+        if key in ("h", "k", KEY_UP, KEY_LEFT):
             self.kill_confirm_index = max(0, self.kill_confirm_index - 1)
             return KeyResult(changed=True)
-        if key in ("k", KEY_UP, KEY_RIGHT):
+        if key in ("j", "l", KEY_DOWN, KEY_RIGHT):
             self.kill_confirm_index = min(len(KILL_CONFIRM_OPTIONS) - 1, self.kill_confirm_index + 1)
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q", "n", "N"):
@@ -294,10 +294,10 @@ class ProcessViewState:
         return KeyResult(changed=True)
 
     def handle_sort_menu_key(self, key: str) -> KeyResult:
-        if key in ("j", KEY_DOWN, KEY_LEFT):
+        if key in ("h", "k", KEY_UP, KEY_LEFT):
             self.sort_menu_index = max(0, self.sort_menu_index - 1)
             return KeyResult(changed=True)
-        if key in ("k", KEY_UP, KEY_RIGHT):
+        if key in ("j", "l", KEY_DOWN, KEY_RIGHT):
             self.sort_menu_index = min(len(SORT_OPTIONS) - 1, self.sort_menu_index + 1)
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q"):
