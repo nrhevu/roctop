@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import html
 import random
+import re
 import sys
 from datetime import datetime, timedelta
 from io import StringIO
@@ -65,7 +66,8 @@ def main() -> int:
         file=StringIO(),
     )
     console.print(render_snapshot(snapshot, history, state, terminal_height=args.height, terminal_width=args.width))
-    console.save_svg(str(output), title="roctop")
+    console.save_svg(str(output), title="roctop", unique_id="roctop-demo")
+    vectorize_braille_graphs(output)
     verify_svg(output)
     print(f"Wrote {output}")
     return 0
@@ -158,10 +160,11 @@ def build_history(timestamp: datetime, seed: int) -> object:
     from roctop.history import MetricSample, MetricsHistory
 
     rng = random.Random(seed)
-    history = MetricsHistory(max_samples=120)
-    start = timestamp - timedelta(seconds=119)
+    sample_count = 180
+    history = MetricsHistory(max_samples=1081)
+    start = timestamp - timedelta(seconds=sample_count - 1)
     values = {"cpu": 53.0, "mem": 61.0, "gpu": 79.0, "gpu_mem": 68.0}
-    for index in range(72):
+    for index in range(sample_count):
         values["cpu"] = clamp(values["cpu"] + rng.uniform(-8.5, 7.0), 22.0, 88.0)
         values["mem"] = clamp(values["mem"] + rng.uniform(-2.8, 3.2), 45.0, 75.0)
         values["gpu"] = clamp(values["gpu"] + rng.uniform(-15.0, 13.0), 35.0, 99.0)
@@ -172,7 +175,7 @@ def build_history(timestamp: datetime, seed: int) -> object:
             values["cpu"] = min(88.0, values["cpu"] + rng.uniform(14.0, 22.0))
         history.append_sample(
             MetricSample(
-                timestamp=start + timedelta(seconds=index * 2),
+                timestamp=start + timedelta(seconds=index),
                 avg_cpu_percent=values["cpu"],
                 avg_mem_percent=values["mem"],
                 avg_gpu_percent=values["gpu"],
@@ -184,6 +187,79 @@ def build_history(timestamp: datetime, seed: int) -> object:
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+TEXT_ELEMENT_RE = re.compile(r"<text (?P<attrs>[^>]*)>(?P<content>.*?)</text>", re.DOTALL)
+SVG_ATTR_RE = re.compile(r'([A-Za-z_:][-A-Za-z0-9_:.]*)="([^"]*)"')
+BRAILLE_DOTS = (
+    (0x01, 0, 0),
+    (0x02, 0, 1),
+    (0x04, 0, 2),
+    (0x40, 0, 3),
+    (0x08, 1, 0),
+    (0x10, 1, 1),
+    (0x20, 1, 2),
+    (0x80, 1, 3),
+)
+
+
+def vectorize_braille_graphs(path: Path) -> None:
+    svg = path.read_text()
+    font_size = css_px(svg, "font-size", 20.0)
+
+    def replace_text(match: re.Match[str]) -> str:
+        content = html.unescape(match.group("content"))
+        if not any(is_braille(char) for char in content):
+            return match.group(0)
+        attrs = dict(SVG_ATTR_RE.findall(match.group("attrs")))
+        x = float(attrs["x"])
+        y = float(attrs["y"])
+        text_length = float(attrs.get("textLength", "0") or "0")
+        cell_width = text_length / len(content) if text_length and content else font_size * 0.61
+        col_width = cell_width / 2.0
+        dot_size = min(col_width * 0.44, font_size * 0.14)
+        row_pitch = font_size * 0.22
+        row_origin = y - font_size * 0.76
+        rects: list[str] = []
+        for index, char in enumerate(content):
+            if not is_braille(char):
+                continue
+            mask = ord(char) - 0x2800
+            cell_x = x + index * cell_width
+            for bit, column, row in BRAILLE_DOTS:
+                if not mask & bit:
+                    continue
+                center_x = cell_x + (column + 0.5) * col_width
+                center_y = row_origin + row * row_pitch
+                rects.append(
+                    '<rect x="{x}" y="{y}" width="{size}" height="{size}" rx="{rx}"/>'.format(
+                        x=svg_number(center_x - dot_size / 2.0),
+                        y=svg_number(center_y - dot_size / 2.0),
+                        size=svg_number(dot_size),
+                        rx=svg_number(dot_size * 0.24),
+                    )
+                )
+        group_attrs = []
+        if "class" in attrs:
+            group_attrs.append(f'class="{attrs["class"]}"')
+        if "clip-path" in attrs:
+            group_attrs.append(f'clip-path="{attrs["clip-path"]}"')
+        return f"<g {' '.join(group_attrs)}>{''.join(rects)}</g>"
+
+    path.write_text(TEXT_ELEMENT_RE.sub(replace_text, svg))
+
+
+def css_px(svg: str, property_name: str, default: float) -> float:
+    match = re.search(rf"{re.escape(property_name)}:\s*([0-9.]+)px", svg)
+    return float(match.group(1)) if match else default
+
+
+def is_braille(char: str) -> bool:
+    return "\u2800" <= char <= "\u28ff"
+
+
+def svg_number(value: float) -> str:
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def verify_svg(path: Path) -> None:
@@ -207,6 +283,8 @@ def verify_svg(path: Path) -> None:
     forbidden = [value for value in FORBIDDEN_STRINGS if value in text]
     if forbidden:
         missing.append("forbidden real-machine strings: " + ", ".join(forbidden))
+    if any(is_braille(char) for char in text):
+        missing.append("raw Braille graph glyphs")
     if missing:
         raise SystemExit("SVG validation failed: " + "; ".join(missing))
 

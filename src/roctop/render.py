@@ -345,7 +345,7 @@ def time_axis_line(width: int) -> Text:
             continue
         chars[space] = " "
         chars[start:marker] = list(label)
-        chars[marker] = "│"
+        chars[marker] = "├"
     return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
 
 
