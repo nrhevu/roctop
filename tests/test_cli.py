@@ -184,6 +184,70 @@ class CliTests(unittest.TestCase):
         self.assertGreaterEqual(len(live.updates), 2)
         self.assertTrue(all(refresh for _renderable, refresh in live.updates))
 
+    def test_live_loop_redraws_at_interval_without_snapshot_update(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=100)
+
+        class FakeCollector:
+            def raise_if_failed(self) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        class FakeClock:
+            def __init__(self) -> None:
+                self.current = 0.0
+
+            def monotonic(self) -> float:
+                return self.current
+
+            def advance(self, seconds: float) -> None:
+                self.current += seconds
+
+        class FakeLive:
+            def __init__(self, clock: FakeClock) -> None:
+                self.clock = clock
+                self.update_times: list[float] = []
+
+            def update(self, renderable, refresh: bool = False) -> None:
+                self.update_times.append(self.clock.current)
+
+        class FakeKeyboard:
+            def __init__(self, clock: FakeClock, live: FakeLive) -> None:
+                self.clock = clock
+                self.live = live
+
+            def read_keys(self, timeout: float):
+                self.clock.advance(timeout)
+                if len(self.live.update_times) >= 3:
+                    return ["q"]
+                return []
+
+        clock = FakeClock()
+        live = FakeLive(clock)
+        original_monotonic = cli.time.monotonic
+
+        try:
+            cli.time.monotonic = clock.monotonic
+            cli.poll_live_until_quit(
+                live,
+                FakeKeyboard(clock, live),
+                Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)),
+                cli.MetricsHistory(max_samples=120),
+                cli.ProcessViewState(),
+                FakeConsole(),
+                FakeCollector(),
+                interval=0.1,
+            )
+        finally:
+            cli.time.monotonic = original_monotonic
+
+        self.assertGreaterEqual(len(live.update_times), 4)
+        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [0.1, 0.2, 0.3])
+
     def test_poll_input_batches_movement_keys_into_one_render(self) -> None:
         class FakeConsole:
             @property

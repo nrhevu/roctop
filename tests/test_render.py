@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 from io import StringIO
 from datetime import datetime
@@ -162,6 +163,21 @@ class RenderTests(unittest.TestCase):
         self.assertLess(output.index("Avg %GPU: 33.2%"), output.index("Avg %GPU MEM: 54.6%"))
         self.assertLess(output.index("%Utilization"), output.index("Avg %CPU"))
         self.assertLess(output.index("Avg %CPU"), output.index("PID"))
+
+    def test_header_can_render_live_subsecond_display_time(self) -> None:
+        snapshot = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0))
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(
+            render_snapshot(
+                snapshot,
+                display_time=datetime(2026, 6, 22, 12, 0, 1, 234000),
+                show_subsecond_time=True,
+            )
+        )
+
+        output = console.export_text()
+        self.assertIn("Mon Jun 22 12:00:01.2 2026", output)
+        self.assertNotIn("Mon Jun 22 12:00:00 2026", output)
 
     def test_low_history_values_draw_visible_trace_on_right(self) -> None:
         lines = metric_graph_lines([None, 5.0, 12.0], width=6, height=15, style="green")
@@ -587,6 +603,23 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("cmd-102", output)
         self.assertIn("cmd-104", output)
         self.assertIn("cmd-105", output)
+
+    def test_static_snapshot_with_terminal_height_renders_under_100ms(self) -> None:
+        process_count = 10000
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=synthetic_long_processes(process_count),
+        )
+        console = Console(width=180, record=True, file=StringIO())
+
+        start = time.perf_counter()
+        console.print(render_snapshot(snapshot, terminal_height=40, terminal_width=180))
+        elapsed = time.perf_counter() - start
+
+        output = console.export_text()
+        self.assertLess(elapsed, 0.1)
+        self.assertIn(f"/{process_count}", output)
+        self.assertNotIn("--rank 9999", output)
 
     def test_snapshot_keeps_selected_process_visible_with_graphs(self) -> None:
         long_args = (

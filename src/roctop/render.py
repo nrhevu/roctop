@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import textwrap
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Sequence
 
 from rich import box
@@ -61,10 +62,12 @@ def render_snapshot(
     terminal_height: int | None = None,
     terminal_width: int | None = None,
     display_processes: list[ProcessInfo] | None = None,
+    display_time: datetime | None = None,
+    show_subsecond_time: bool = False,
 ) -> Group:
     with profile_span("render"):
         gpu_table = render_gpu_table(snapshot.gpus)
-        process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state) if process_state else None
+        process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state)
         process_table = render_process_table(
             display_processes if display_processes is not None else snapshot.processes,
             process_state=process_state,
@@ -76,6 +79,8 @@ def render_snapshot(
             snapshot,
             process_state=process_state,
             process_count=len(snapshot.processes),
+            display_time=display_time,
+            show_subsecond_time=show_subsecond_time,
         )
         parts = [header, gpu_table]
         if history is not None:
@@ -111,12 +116,14 @@ def render_header(
     snapshot: Snapshot,
     process_state: ProcessViewState | None = None,
     process_count: int = 0,
+    display_time: datetime | None = None,
+    show_subsecond_time: bool = False,
 ) -> Panel:
     title = Text("roctop", style=f"bold {DRACULA_CYAN}")
     if snapshot.node_name:
         title.append(" @ ", style=DRACULA_DIM)
         title.append(snapshot.node_name, style=f"bold {DRACULA_GREEN}")
-    timestamp = snapshot.timestamp.strftime("%a %b %d %H:%M:%S %Y")
+    timestamp = format_header_timestamp(display_time or snapshot.timestamp, show_subsecond_time)
     details = Text()
     details.append(timestamp, style=DRACULA_FG)
     if snapshot.driver_version:
@@ -138,6 +145,13 @@ def render_header(
         details.append("Ctrl-C: ", style=f"bold {DRACULA_ORANGE}")
         details.append("quit", style=DRACULA_DIM)
     return Panel(details, title=title, border_style=DRACULA_DIM, box=box.SQUARE)
+
+
+def format_header_timestamp(timestamp: datetime, show_subsecond_time: bool = False) -> str:
+    if not show_subsecond_time:
+        return timestamp.strftime("%a %b %d %H:%M:%S %Y")
+    tenth = timestamp.microsecond // 100000
+    return f"{timestamp.strftime('%a %b %d %H:%M:%S')}.{tenth} {timestamp.strftime('%Y')}"
 
 
 def append_process_help(details: Text) -> None:
@@ -392,6 +406,7 @@ def render_process_table(
     processes_sorted: bool = False,
 ) -> Table:
     display_processes = list(processes)
+    process_count = len(display_processes)
     display_rows: list[ProcessRenderRow]
     title = None
     command_width = estimate_process_command_width(terminal_width)
@@ -402,6 +417,9 @@ def render_process_table(
         title = render_process_title(process_state, len(display_processes))
         display_rows = visible_process_window(display_processes, process_state, max_rows, command_width)
     else:
+        if max_rows is not None and len(display_processes) > max_rows:
+            display_processes = display_processes[: max(1, max_rows)]
+            title = render_static_process_title(len(display_processes), process_count)
         display_rows = [ProcessRenderRow(proc, process_command(proc), 1) for proc in display_processes]
 
     table = Table(
@@ -473,6 +491,10 @@ def render_process_title(process_state: ProcessViewState, process_count: int) ->
         title.append("\n")
         title.append(menu)
     return title
+
+
+def render_static_process_title(visible_count: int, process_count: int) -> Text:
+    return Text(f"Processes  {visible_count}/{process_count}", style=DRACULA_DIM)
 
 
 def process_status_style(process_state: ProcessViewState) -> str:

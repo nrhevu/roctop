@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 from rich.console import Console
@@ -33,6 +34,7 @@ from .render import render_snapshot
 
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
+LIVE_CLOCK_MAX_SECONDS = 1.0
 
 
 @dataclass(slots=True)
@@ -123,7 +125,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.once:
             snapshot = collect_snapshot_retry(args.interval)
-            console.print(render_snapshot(snapshot))
+            console.print(
+                render_snapshot(
+                    snapshot,
+                    terminal_height=console.size.height,
+                    terminal_width=console.size.width,
+                )
+            )
             return 0
 
         return run_live(console, args.interval)
@@ -143,7 +151,7 @@ def run_live(console: Console, interval: float) -> int:
     with (
         TerminalKeyboard() as keyboard,
         Live(
-            render_live_snapshot(snapshot, history, process_state, console),
+            render_live_snapshot(snapshot, history, process_state, console, interval=interval),
             console=console,
             screen=True,
             auto_refresh=False,
@@ -151,7 +159,7 @@ def run_live(console: Console, interval: float) -> int:
     ):
         collector.start()
         try:
-            poll_live_until_quit(live, keyboard, snapshot, history, process_state, console, collector)
+            poll_live_until_quit(live, keyboard, snapshot, history, process_state, console, collector, interval)
         finally:
             collector.stop()
     return 0
@@ -165,9 +173,12 @@ def poll_live_until_quit(
     process_state: ProcessViewState,
     console: Console,
     collector: BackgroundSnapshotCollector,
+    interval: float,
 ) -> None:
     rendered_size = console_dimensions(console)
     latest_sequence = 0
+    render_interval = live_render_interval(interval)
+    next_render_at = time.monotonic() + render_interval
     while True:
         collector.raise_if_failed()
         update = collector.latest_after(latest_sequence)
@@ -177,30 +188,42 @@ def poll_live_until_quit(
             history.add_snapshot(snapshot)
             rendered_size = console_dimensions(console)
             live.update(
-                render_snapshot(snapshot, history, process_state, *rendered_size),
+                render_live_snapshot(snapshot, history, process_state, console, interval=interval),
                 refresh=True,
             )
+            next_render_at = time.monotonic() + render_interval
 
         now = time.monotonic()
         current_size = console_dimensions(console)
         status_expired = process_state.expire_status_message(now)
-        if current_size != rendered_size or status_expired:
+        refresh_due = now >= next_render_at
+        if current_size != rendered_size or status_expired or refresh_due:
             live.update(
-                render_snapshot(snapshot, history, process_state, *current_size),
+                render_live_snapshot(snapshot, history, process_state, console, interval=interval),
                 refresh=True,
             )
             rendered_size = current_size
+            next_render_at = now + render_interval
 
-        keys = keyboard.read_keys(timeout=KEY_POLL_SECONDS)
+        timeout = min(KEY_POLL_SECONDS, max(0.0, next_render_at - time.monotonic()))
+        keys = keyboard.read_keys(timeout=timeout)
         if not keys:
             continue
 
         quit_requested, processes = handle_key_batch(snapshot, process_state, keys)
         rendered_size = console_dimensions(console)
         live.update(
-            render_snapshot(snapshot, history, process_state, *rendered_size, display_processes=processes),
+            render_live_snapshot(
+                snapshot,
+                history,
+                process_state,
+                console,
+                display_processes=processes,
+                interval=interval,
+            ),
             refresh=True,
         )
+        next_render_at = time.monotonic() + render_interval
         if quit_requested:
             return
 
@@ -288,8 +311,27 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
     return key in ("j", "k", KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, "n", "N", "x")
 
 
-def render_live_snapshot(snapshot, history: MetricsHistory, process_state: ProcessViewState, console: Console):
-    return render_snapshot(snapshot, history, process_state, *console_dimensions(console))
+def render_live_snapshot(
+    snapshot,
+    history: MetricsHistory,
+    process_state: ProcessViewState,
+    console: Console,
+    display_processes: list[ProcessInfo] | None = None,
+    interval: float = 1.0,
+):
+    return render_snapshot(
+        snapshot,
+        history,
+        process_state,
+        *console_dimensions(console),
+        display_processes=display_processes,
+        display_time=datetime.now(),
+        show_subsecond_time=interval < 1.0,
+    )
+
+
+def live_render_interval(interval: float) -> float:
+    return max(KEY_POLL_SECONDS, min(interval, LIVE_CLOCK_MAX_SECONDS))
 
 
 def console_dimensions(console: Console) -> tuple[int, int]:
