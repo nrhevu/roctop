@@ -382,18 +382,11 @@ def render_process_table(
 ) -> Table:
     display_processes = list(processes)
     title = None
-    caption = None
     command_width = estimate_process_command_width(terminal_width)
     if process_state is not None:
         display_processes = process_state.sorted_processes(display_processes)
         process_state.sync(display_processes)
         title = render_process_title(process_state, len(display_processes))
-        caption_text = process_state.caption()
-        if caption_text:
-            caption_style = DRACULA_YELLOW
-            if process_state.mode == MODE_KILL_CONFIRM:
-                caption_style = DRACULA_RED
-            caption = Text(caption_text, style=caption_style)
         display_processes = visible_process_window(display_processes, process_state, max_rows, command_width)
 
     table = Table(
@@ -403,8 +396,6 @@ def render_process_table(
         padding=(0, 1),
         title=title,
         title_justify="left",
-        caption=caption,
-        caption_justify="left",
     )
     table.add_column(process_column_header("GPU", "gpu", process_state), justify="right", style="bold")
     table.add_column(process_column_header("PID", "pid", process_state), justify="right")
@@ -449,6 +440,10 @@ def render_process_table(
 
 def render_process_title(process_state: ProcessViewState, process_count: int) -> Text:
     title = Text(process_state.process_title(process_count), style=DRACULA_DIM)
+    status_text = process_state.caption()
+    if status_text:
+        title.append("   ")
+        title.append(status_text, style=process_status_style(process_state))
     sort_menu = render_sort_menu(process_state)
     kill_menu = render_kill_confirm_menu(process_state)
     search_menu = render_search_menu(process_state)
@@ -457,6 +452,12 @@ def render_process_title(process_state: ProcessViewState, process_count: int) ->
         title.append("\n")
         title.append(menu)
     return title
+
+
+def process_status_style(process_state: ProcessViewState) -> str:
+    if process_state.mode == MODE_KILL_CONFIRM:
+        return DRACULA_RED
+    return DRACULA_YELLOW
 
 
 def render_sort_menu(process_state: ProcessViewState) -> Text | None:

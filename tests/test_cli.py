@@ -109,6 +109,64 @@ class CliTests(unittest.TestCase):
         self.assertGreaterEqual(len(live.updates), 2)
         self.assertTrue(all(refresh for _renderable, refresh in live.updates))
 
+    def test_poll_input_redraws_when_status_message_expires(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=100)
+
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def read_keys(self, timeout: float):
+                self.calls += 1
+                if self.calls >= 3:
+                    return ["q"]
+                return []
+
+        class FakeLive:
+            def __init__(self) -> None:
+                self.updates = []
+
+            def update(self, renderable, refresh: bool = False) -> None:
+                self.updates.append((renderable, refresh))
+
+        class FakeClock:
+            def __init__(self) -> None:
+                self.times = iter([0.0, 1.0, 3.0, 3.1])
+
+            def monotonic(self) -> float:
+                return next(self.times)
+
+        console = FakeConsole()
+        keyboard = FakeKeyboard()
+        live = FakeLive()
+        snapshot = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0))
+        process_state = cli.ProcessViewState()
+        process_state.set_status_message("Search: demo", now=0.0)
+        original_monotonic = cli.time.monotonic
+
+        try:
+            cli.time.monotonic = FakeClock().monotonic
+            quit_requested = cli.poll_input_until_refresh(
+                live,
+                keyboard,
+                snapshot,
+                cli.MetricsHistory(max_samples=120),
+                process_state,
+                console,
+                interval=5.0,
+            )
+        finally:
+            cli.time.monotonic = original_monotonic
+
+        self.assertTrue(quit_requested)
+        self.assertEqual(process_state.status_message, "")
+        self.assertIsNone(process_state.status_message_expires_at)
+        self.assertGreaterEqual(len(live.updates), 2)
+        self.assertTrue(all(refresh for _renderable, refresh in live.updates))
+
 
 if __name__ == "__main__":
     unittest.main()

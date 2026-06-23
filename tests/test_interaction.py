@@ -17,6 +17,7 @@ from roctop.interaction import (
     MODE_SEARCH,
     MODE_SORT_MENU,
     ProcessViewState,
+    STATUS_MESSAGE_SECONDS,
     elapsed_seconds,
     parse_keys,
 )
@@ -190,6 +191,17 @@ class InteractionTests(unittest.TestCase):
         state.handle_key("n", processes)
         self.assertEqual(state.selected_pid, 100)
         self.assertEqual(state.status_message, "No matches for: missing")
+
+    def test_status_message_expires_after_three_seconds(self) -> None:
+        state = ProcessViewState()
+        state.set_status_message("Search: demo", now=10.0)
+
+        self.assertEqual(state.status_message_expires_at, 10.0 + STATUS_MESSAGE_SECONDS)
+        self.assertFalse(state.expire_status_message(now=12.9))
+        self.assertEqual(state.status_message, "Search: demo")
+        self.assertTrue(state.expire_status_message(now=13.0))
+        self.assertEqual(state.status_message, "")
+        self.assertIsNone(state.status_message_expires_at)
 
     def test_kill_confirm_can_cancel_or_send_selected_signal(self) -> None:
         processes = [proc(42)]

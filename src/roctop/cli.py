@@ -96,11 +96,13 @@ def poll_input_until_refresh(
     deadline = time.monotonic() + interval
     rendered_size = console_dimensions(console)
     while True:
-        remaining = deadline - time.monotonic()
+        now = time.monotonic()
+        remaining = deadline - now
         if remaining <= 0:
             return False
         current_size = console_dimensions(console)
-        if current_size != rendered_size:
+        status_expired = process_state.expire_status_message(now)
+        if current_size != rendered_size or status_expired:
             live.update(
                 render_snapshot(snapshot, history, process_state, *current_size),
                 refresh=True,

@@ -414,8 +414,9 @@ class RenderTests(unittest.TestCase):
         console = Console(width=140, record=True, file=StringIO())
         console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
         plain = console.export_text(clear=False)
+        title_line = next(line for line in plain.splitlines() if "Processes  1/1" in line)
         self.assertIn("Search: train", plain)
-        self.assertIn("No matches for: serve", plain)
+        self.assertIn("No matches for: serve", title_line)
         self.assertLess(plain.index("Search: train"), plain.index("│ GPU", plain.index("Search: train")))
 
     def test_sort_menu_stays_above_process_table_when_cropped(self) -> None:

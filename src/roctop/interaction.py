@@ -5,6 +5,7 @@ import select
 import signal
 import sys
 import termios
+import time
 import tty
 from dataclasses import dataclass
 from typing import Callable, Iterable
@@ -77,6 +78,7 @@ DEFAULT_DESCENDING_SORTS = {
     "mem",
     "time",
 }
+STATUS_MESSAGE_SECONDS = 3.0
 
 
 @dataclass(slots=True)
@@ -96,6 +98,7 @@ class ProcessViewState:
     sort_menu_index: int = 0
     kill_confirm_index: int = 0
     status_message: str = ""
+    status_message_expires_at: float | None = None
     viewport_rows: int = 8
     search_query: str = ""
     search_input: str = ""
@@ -186,12 +189,12 @@ class ProcessViewState:
         if key == "s":
             self.mode = MODE_SORT_MENU
             self.sort_menu_index = current_sort_menu_index(self.sort_field)
-            self.status_message = ""
+            self.clear_status_message()
             return KeyResult(changed=True)
         if key == "/":
             self.mode = MODE_SEARCH
             self.search_input = ""
-            self.status_message = ""
+            self.clear_status_message()
             return KeyResult(changed=True)
         if key == "n":
             self.search_next(processes, direction=1)
@@ -202,11 +205,11 @@ class ProcessViewState:
         if key == "x":
             selected = self.selected_process(processes)
             if selected is None:
-                self.status_message = "No process selected"
+                self.set_status_message("No process selected")
             else:
                 self.mode = MODE_KILL_CONFIRM
                 self.kill_confirm_index = 0
-                self.status_message = ""
+                self.clear_status_message()
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -214,7 +217,7 @@ class ProcessViewState:
         if key == KEY_ESC:
             self.mode = MODE_NORMAL
             self.search_input = ""
-            self.status_message = ""
+            self.clear_status_message()
             return KeyResult(changed=True)
         if key == KEY_ENTER:
             query = self.search_input.strip()
@@ -245,7 +248,7 @@ class ProcessViewState:
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q", "n", "N"):
             self.mode = MODE_NORMAL
-            self.status_message = ""
+            self.clear_status_message()
             return KeyResult(changed=True)
         if key in ("y", "Y"):
             self.kill_confirm_index = KILL_CONFIRM_OPTIONS.index(KILL_CONFIRM_SIGTERM)
@@ -253,7 +256,7 @@ class ProcessViewState:
             option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
             if option == KILL_CONFIRM_CANCEL:
                 self.mode = MODE_NORMAL
-                self.status_message = ""
+                self.clear_status_message()
                 return KeyResult(changed=True)
         else:
             return KeyResult()
@@ -263,18 +266,18 @@ class ProcessViewState:
         selected = self.selected_process(processes)
         self.mode = MODE_NORMAL
         if selected is None:
-            self.status_message = "No process selected"
+            self.set_status_message("No process selected")
             return KeyResult(changed=True)
         try:
             kill_func(selected.pid, kill_signal)
         except ProcessLookupError:
-            self.status_message = f"PID {selected.pid} is no longer running"
+            self.set_status_message(f"PID {selected.pid} is no longer running")
         except PermissionError:
-            self.status_message = f"Permission denied killing PID {selected.pid}"
+            self.set_status_message(f"Permission denied killing PID {selected.pid}")
         except OSError as exc:
-            self.status_message = f"Failed to kill PID {selected.pid}: {exc}"
+            self.set_status_message(f"Failed to kill PID {selected.pid}: {exc}")
         else:
-            self.status_message = f"Sent {kill_signal.name} to PID {selected.pid}"
+            self.set_status_message(f"Sent {kill_signal.name} to PID {selected.pid}")
         return KeyResult(changed=True)
 
     def handle_sort_menu_key(self, key: str) -> KeyResult:
@@ -286,7 +289,7 @@ class ProcessViewState:
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q"):
             self.mode = MODE_NORMAL
-            self.status_message = ""
+            self.clear_status_message()
             return KeyResult(changed=True)
         if key == KEY_ENTER:
             field = SORT_OPTIONS[self.sort_menu_index]
@@ -296,7 +299,7 @@ class ProcessViewState:
                 self.sort_field = field
                 self.sort_desc = field in DEFAULT_DESCENDING_SORTS
             self.mode = MODE_NORMAL
-            self.status_message = ""
+            self.clear_status_message()
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -311,16 +314,16 @@ class ProcessViewState:
     def search_next(self, processes: list[ProcessInfo], direction: int) -> bool:
         query = self.search_query.strip()
         if not query:
-            self.status_message = "No search query"
+            self.set_status_message("No search query")
             return False
         match_index = self.search_match_index(processes, query, direction)
         if match_index is None:
-            self.status_message = f"No matches for: {query}"
+            self.set_status_message(f"No matches for: {query}")
             return False
         self.selected_index = match_index
         self.selected_pid = processes[match_index].pid
         self.ensure_selected_visible(len(processes))
-        self.status_message = f"Search: {query}"
+        self.set_status_message(f"Search: {query}")
         return True
 
     def search_match_index(self, processes: list[ProcessInfo], query: str, direction: int) -> int | None:
@@ -363,6 +366,23 @@ class ProcessViewState:
 
     def caption(self) -> str:
         return self.status_message
+
+    def set_status_message(self, message: str, now: float | None = None) -> None:
+        self.status_message = message
+        self.status_message_expires_at = (time.monotonic() if now is None else now) + STATUS_MESSAGE_SECONDS
+
+    def clear_status_message(self) -> None:
+        self.status_message = ""
+        self.status_message_expires_at = None
+
+    def expire_status_message(self, now: float | None = None) -> bool:
+        if not self.status_message or self.status_message_expires_at is None:
+            return False
+        current_time = time.monotonic() if now is None else now
+        if current_time < self.status_message_expires_at:
+            return False
+        self.clear_status_message()
+        return True
 
 
 class TerminalKeyboard:
