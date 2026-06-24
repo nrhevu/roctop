@@ -156,6 +156,7 @@ def render_snapshot(
     display_time: datetime | None = None,
     show_subsecond_time: bool = False,
     history_samples: Sequence[MetricSample] | None = None,
+    graph_time: datetime | None = None,
 ) -> Group | PopupOverlay:
     with profile_span("render"):
         gpu_table = render_gpu_table(snapshot.gpus)
@@ -177,7 +178,7 @@ def render_snapshot(
         )
         parts = [header, gpu_table]
         if history is not None:
-            parts.append(render_metrics_graphs(history, end_time=display_time, samples=history_samples))
+            parts.append(render_metrics_graphs(history, end_time=graph_time or display_time, samples=history_samples))
         parts.append(process_table)
         visible_warnings = ui_warnings(snapshot.warnings)
         if visible_warnings:
@@ -641,6 +642,8 @@ def metric_values_by_time(
     if not samples:
         return values
     graph_end_time = end_time or samples[-1].timestamp
+    totals = [0.0] * seconds
+    counts = [0] * seconds
     for sample in samples:
         elapsed_seconds = (graph_end_time - sample.timestamp).total_seconds()
         if elapsed_seconds < -0.5:
@@ -648,7 +651,16 @@ def metric_values_by_time(
         offset = max(0, int(elapsed_seconds))
         if offset >= seconds:
             continue
-        values[seconds - 1 - offset] = getattr(sample, metric_name)
+        value = getattr(sample, metric_name)
+        if value is None:
+            continue
+        index = seconds - 1 - offset
+        totals[index] += value
+        counts[index] += 1
+
+    for index, count in enumerate(counts):
+        if count:
+            values[index] = totals[index] / count
 
     last_value: float | None = None
     for index, value in enumerate(values):

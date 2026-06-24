@@ -39,6 +39,7 @@ from .render import render_snapshot
 
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
+GRAPH_FRAME_SECONDS = 1.0
 
 
 @dataclass(slots=True)
@@ -172,11 +173,20 @@ def run_live(console: Console, interval: float) -> int:
     snapshot = collect_snapshot_retry(interval)
     history.add_snapshot(snapshot)
     collector = BackgroundSnapshotCollector(interval, history=history)
-    graph_frame = capture_graph_frame(history)
+    display_time = datetime.now()
+    graph_frame = capture_graph_frame(history, display_time)
     with (
         TerminalKeyboard() as keyboard,
         Live(
-            render_live_snapshot(snapshot, history, process_state, console, interval=interval, graph_frame=graph_frame),
+            render_live_snapshot(
+                snapshot,
+                history,
+                process_state,
+                console,
+                interval=interval,
+                display_time=display_time,
+                graph_frame=graph_frame,
+            ),
             console=console,
             screen=True,
             auto_refresh=False,
@@ -193,6 +203,7 @@ def run_live(console: Console, interval: float) -> int:
                 console,
                 collector,
                 interval,
+                display_time=display_time,
                 graph_frame=graph_frame,
             )
         finally:
@@ -209,13 +220,17 @@ def poll_live_until_quit(
     console: Console,
     collector: BackgroundSnapshotCollector,
     interval: float,
+    display_time: datetime | None = None,
     graph_frame: GraphFrame | None = None,
 ) -> None:
     rendered_size = console_dimensions(console)
     latest_sequence = 0
     render_interval = live_render_interval(interval)
+    graph_interval = graph_frame_interval(interval)
     next_render_at = time.monotonic() + render_interval
-    graph_frame = graph_frame or capture_graph_frame(history)
+    next_graph_at = time.monotonic() + graph_interval
+    display_time = display_time or datetime.now()
+    graph_frame = graph_frame or capture_graph_frame(history, display_time)
     while True:
         collector.raise_if_failed()
         update = collector.latest_after(latest_sequence)
@@ -227,8 +242,11 @@ def poll_live_until_quit(
         current_size = console_dimensions(console)
         status_expired = process_state.expire_status_message(now)
         refresh_due = now >= next_render_at
+        graph_due = now >= next_graph_at
         if refresh_due:
-            graph_frame = capture_graph_frame(history)
+            display_time = datetime.now()
+        if graph_due:
+            graph_frame = capture_graph_frame(history, display_time)
         if current_size != rendered_size or status_expired or refresh_due:
             live.update(
                 render_live_snapshot(
@@ -237,6 +255,7 @@ def poll_live_until_quit(
                     process_state,
                     console,
                     interval=interval,
+                    display_time=display_time,
                     graph_frame=graph_frame,
                 ),
                 refresh=True,
@@ -244,6 +263,8 @@ def poll_live_until_quit(
             rendered_size = current_size
             if refresh_due:
                 next_render_at = now + render_interval
+            if graph_due:
+                next_graph_at = now + graph_interval
 
         timeout = min(KEY_POLL_SECONDS, max(0.0, next_render_at - time.monotonic()))
         keys = keyboard.read_keys(timeout=timeout)
@@ -260,6 +281,7 @@ def poll_live_until_quit(
                 console,
                 display_processes=processes,
                 interval=interval,
+                display_time=display_time,
                 graph_frame=graph_frame,
             ),
             refresh=True,
@@ -416,27 +438,34 @@ def render_live_snapshot(
     console: Console,
     display_processes: list[ProcessInfo] | None = None,
     interval: float = 1.0,
+    display_time: datetime | None = None,
     graph_frame: GraphFrame | None = None,
 ):
-    frame = graph_frame or capture_graph_frame(history)
+    display_time = display_time or datetime.now()
+    frame = graph_frame or capture_graph_frame(history, display_time)
     return render_snapshot(
         snapshot,
         history,
         process_state,
         *console_dimensions(console),
         display_processes=display_processes,
-        display_time=frame.display_time,
+        display_time=display_time,
         show_subsecond_time=interval < 1.0,
         history_samples=frame.history_samples,
+        graph_time=frame.display_time,
     )
 
 
-def capture_graph_frame(history: MetricsHistory) -> GraphFrame:
-    return GraphFrame(display_time=datetime.now(), history_samples=history.samples)
+def capture_graph_frame(history: MetricsHistory, display_time: datetime | None = None) -> GraphFrame:
+    return GraphFrame(display_time=display_time or datetime.now(), history_samples=history.samples)
 
 
 def live_render_interval(interval: float) -> float:
     return max(KEY_POLL_SECONDS, interval)
+
+
+def graph_frame_interval(interval: float) -> float:
+    return max(GRAPH_FRAME_SECONDS, live_render_interval(interval))
 
 
 def console_dimensions(console: Console) -> tuple[int, int]:

@@ -326,6 +326,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cli.live_render_interval(0.01), cli.KEY_POLL_SECONDS)
         self.assertEqual(cli.live_render_interval(0.25), 0.25)
 
+    def test_graph_frame_interval_has_one_second_floor(self) -> None:
+        self.assertEqual(cli.graph_frame_interval(0.01), 1.0)
+        self.assertEqual(cli.graph_frame_interval(0.25), 1.0)
+        self.assertEqual(cli.graph_frame_interval(2.0), 2.0)
+
     def test_live_render_snapshot_uses_cached_graph_frame(self) -> None:
         class FakeConsole:
             @property
