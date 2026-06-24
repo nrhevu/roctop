@@ -304,30 +304,70 @@ def render_process_info_popup(
     process_state: ProcessViewState,
     terminal_width: int | None = None,
 ) -> Panel:
-    rows = process_info_rows(snapshot, process_state)
+    rows = process_info_visual_rows(
+        process_info_rows(snapshot, process_state),
+        process_info_panel_width(terminal_width),
+    )
+    process_state.process_info_render_row_count = len(rows)
     max_offset = max(0, len(rows) - PROCESS_INFO_VISIBLE_ROWS)
     start = min(max(0, process_state.process_info_scroll_offset), max_offset)
+    process_state.process_info_scroll_offset = start
     end = min(len(rows), start + PROCESS_INFO_VISIBLE_ROWS)
 
     table = Table(box=box.SIMPLE, expand=True, show_header=False, show_lines=False, padding=(0, 1))
     table.add_column("FIELD", style=DRACULA_DIM, no_wrap=True)
-    table.add_column("VALUE", style=DRACULA_FG, ratio=1, overflow="fold")
-    for label, value in rows[start:end]:
+    table.add_column("VALUE", style=DRACULA_FG, ratio=1, no_wrap=True, overflow="crop")
+    visible_rows = rows[start:end]
+    for label, value in visible_rows:
         table.add_row(label, value or "-")
+    for _ in range(PROCESS_INFO_VISIBLE_ROWS - len(visible_rows)):
+        table.add_row("", "")
     table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   i/Esc: close"
     table.caption_style = DRACULA_DIM
 
     proc = process_state.process_info_process
     title = f"Process  {proc.pid}" if proc is not None else "Process"
-    available_width = terminal_width or 88
-    panel_width = min(128, max(1, available_width - 4))
     return Panel(
         table,
         title=Text(title, style=f"bold {DRACULA_CYAN}"),
         border_style=DRACULA_CYAN,
         box=box.SQUARE,
-        width=panel_width,
+        width=process_info_panel_width(terminal_width),
     )
+
+
+def process_info_panel_width(terminal_width: int | None = None) -> int:
+    available_width = terminal_width or 88
+    return min(128, max(1, available_width - 4))
+
+
+def process_info_visual_rows(rows: list[tuple[str, str]], panel_width: int) -> list[tuple[str, str]]:
+    label_width = max((len(label) for label, _value in rows), default=0)
+    label_width = min(max(label_width, 8), 18)
+    value_width = max(8, panel_width - label_width - 12)
+    visual_rows: list[tuple[str, str]] = []
+    for label, value in rows:
+        wrapped_lines = wrap_process_info_value(value or "-", value_width)
+        visual_rows.append((label, wrapped_lines[0]))
+        for wrapped_line in wrapped_lines[1:]:
+            visual_rows.append(("", wrapped_line))
+    return visual_rows or [("Status", "-")]
+
+
+def wrap_process_info_value(value: str, width: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in value.splitlines() or ["-"]:
+        lines.extend(
+            textwrap.wrap(
+                raw_line,
+                width=max(1, width),
+                break_long_words=True,
+                break_on_hyphens=False,
+                drop_whitespace=True,
+            )
+            or [""]
+        )
+    return lines or ["-"]
 
 
 def process_info_rows(snapshot: Snapshot, process_state: ProcessViewState) -> list[tuple[str, str]]:

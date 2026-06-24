@@ -137,6 +137,7 @@ class ProcessViewState:
     process_info_detail: ProcessDetailInfo | None = None
     process_info_parent: ProcessInfo | None = None
     process_info_child_count: int = 0
+    process_info_render_row_count: int = 0
     search_query: str = ""
     search_input: str = ""
     filter_query: str = ""
@@ -341,6 +342,7 @@ class ProcessViewState:
         self.process_info_parent = parent
         self.process_info_child_count = max(0, child_count)
         self.process_info_scroll_offset = 0
+        self.process_info_render_row_count = 0
         self.mode = MODE_PROCESS_INFO
         self.clear_status_message()
 
@@ -917,7 +919,8 @@ def max_help_scroll_offset() -> int:
 
 
 def max_process_info_scroll_offset(process_state: ProcessViewState) -> int:
-    return max(0, process_info_row_count(process_state) - PROCESS_INFO_VISIBLE_ROWS)
+    row_count = process_state.process_info_render_row_count or process_info_row_count(process_state)
+    return max(0, row_count - PROCESS_INFO_VISIBLE_ROWS)
 
 
 def process_info_row_count(process_state: ProcessViewState) -> int:

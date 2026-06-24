@@ -12,6 +12,7 @@ import roctop.render as render
 from roctop.cli import handle_key_batch
 from roctop.history import MetricSample, MetricsHistory
 from roctop.interaction import (
+    KEY_DOWN,
     KEY_UP,
     MODE_FILTER,
     MODE_HELP,
@@ -19,6 +20,7 @@ from roctop.interaction import (
     MODE_PROCESS_INFO,
     MODE_SEARCH,
     ProcessViewState,
+    max_process_info_scroll_offset,
 )
 from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 from roctop.render import (
@@ -686,6 +688,45 @@ class RenderTests(unittest.TestCase):
         self.assertIn("j/k or Up/Down: scroll", plain)
         self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("i/Esc: close", plain)
+
+    def test_process_info_popup_keeps_fixed_height_for_long_values(self) -> None:
+        long_command = "bash -lc " + " ".join(f"--flag-{index} value-{index}" for index in range(80))
+        process = ProcessInfo(
+            gpu_index=None,
+            pid=3000674,
+            ppid=3000661,
+            user="root",
+            name="bash",
+            command="bash",
+            args="bash",
+        )
+        parent = ProcessInfo(gpu_index=None, pid=3000661, user="root", args=long_command)
+        detail = ProcessDetailInfo(
+            pid=3000674,
+            cmdline=long_command,
+            cwd="/work/demo",
+            exe="/bin/bash",
+        )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[process],
+            process_ancestors=[parent],
+        )
+        state = ProcessViewState(selected_pid=3000674, mode=MODE_PROCESS_INFO, viewport_rows=4)
+        state.open_process_info(process, detail, parent=parent)
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=35, terminal_width=120))
+        plain = console.export_text(clear=False)
+
+        self.assertLessEqual(len(plain.splitlines()), 35)
+        self.assertIn("Process  3000674", plain)
+        self.assertIn("Parent", plain)
+        self.assertIn("--flag-0", plain)
+        self.assertGreater(state.process_info_render_row_count, render.PROCESS_INFO_VISIBLE_ROWS)
+        self.assertGreater(max_process_info_scroll_offset(state), 0)
+
+        state.handle_key(KEY_DOWN, [process], processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, 1)
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
         processes = [
