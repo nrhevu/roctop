@@ -543,6 +543,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual([row.pid for row in processes], [42])
         self.assertEqual(state.selected_pid, 42)
 
+    def test_background_collector_schedules_from_collect_start_time(self) -> None:
+        interval = 0.12
+        collect_seconds = 0.06
+        collect_starts: list[float] = []
+        collected_three = threading.Event()
+
+        def fake_collect_snapshot() -> Snapshot:
+            collect_starts.append(time.perf_counter())
+            if len(collect_starts) >= 3:
+                collected_three.set()
+            time.sleep(collect_seconds)
+            return Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, len(collect_starts)))
+
+        collector = cli.BackgroundSnapshotCollector(interval=interval, collect_func=fake_collect_snapshot)
+        collector.start()
+        try:
+            self.assertTrue(collected_three.wait(timeout=1.0))
+        finally:
+            collector.stop()
+
+        intervals = [end - start for start, end in zip(collect_starts, collect_starts[1:])]
+        self.assertGreaterEqual(len(intervals), 2)
+        self.assertLess(max(intervals[:2]), interval + collect_seconds * 0.75)
+
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()
         release_collect = threading.Event()

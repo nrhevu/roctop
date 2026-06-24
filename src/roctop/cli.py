@@ -82,19 +82,24 @@ class BackgroundSnapshotCollector:
             raise error
 
     def _run(self) -> None:
-        while not self._stop.wait(self.interval):
+        next_collect_at = time.monotonic() + self.interval
+        while not self._stop.wait(max(0.0, next_collect_at - time.monotonic())):
+            collect_started_at = time.monotonic()
+            snapshot: Snapshot | None = None
             try:
                 snapshot = self.collect_func()
             except CommandTimeout:
-                continue
+                pass
             except CollectionError as exc:
                 with self._lock:
                     self._error = exc
                 return
 
-            with self._lock:
-                self._sequence += 1
-                self._latest = SnapshotUpdate(sequence=self._sequence, snapshot=snapshot)
+            if snapshot is not None:
+                with self._lock:
+                    self._sequence += 1
+                    self._latest = SnapshotUpdate(sequence=self._sequence, snapshot=snapshot)
+            next_collect_at = collect_started_at + self.interval
 
 
 def build_parser() -> argparse.ArgumentParser:
