@@ -340,6 +340,7 @@ def handle_key_batch(
     keys: list[str],
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
+    gpu_indices = snapshot_gpu_indices(snapshot)
     processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
     process_state.sync(processes, adjust_scroll=False)
     processes_dirty = False
@@ -353,7 +354,12 @@ def handle_key_batch(
                 open_selected_process_info(snapshot, process_state, processes)
                 continue
             view_before = process_view_key(process_state)
-            result = process_state.handle_key(key, processes, processes_synced=True)
+            result = process_state.handle_key(
+                key,
+                processes,
+                processes_synced=True,
+                gpu_indices=gpu_indices,
+            )
             quit_requested = quit_requested or result.quit
             if process_view_key(process_state) != view_before:
                 processes_dirty = True
@@ -363,12 +369,28 @@ def handle_key_batch(
     return quit_requested, processes
 
 
-def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, bool]:
+def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, int | None, bool]:
     return (
         process_state.sort_field,
         process_state.sort_desc,
         process_state.filter_query.strip(),
+        process_state.gpu_filter_index,
         process_state.tree_mode,
+    )
+
+
+def snapshot_gpu_indices(snapshot: Snapshot) -> tuple[int, ...]:
+    gpu_indices = tuple(gpu.index for gpu in snapshot.gpus)
+    if gpu_indices:
+        return gpu_indices
+    return tuple(
+        sorted(
+            {
+                proc.gpu_index
+                for proc in snapshot.processes
+                if proc.gpu_index is not None
+            }
+        )
     )
 
 

@@ -144,8 +144,9 @@ def HelpOverlay(
     process_state: ProcessViewState,
     terminal_height: int | None,
     terminal_width: int | None,
+    gpus: Sequence[GpuInfo] | None = None,
 ) -> PopupOverlay:
-    return PopupOverlay(base, lambda width: render_help_popup(process_state, width), terminal_height, terminal_width)
+    return PopupOverlay(base, lambda width: render_help_popup(process_state, width, gpus), terminal_height, terminal_width)
 
 
 def render_snapshot(
@@ -177,6 +178,7 @@ def render_snapshot(
             process_count=len(snapshot.processes),
             display_time=display_time,
             show_subsecond_time=show_subsecond_time,
+            terminal_width=terminal_width,
         )
         parts = [header, gpu_table]
         if history is not None:
@@ -187,7 +189,7 @@ def render_snapshot(
             parts.append(render_warnings(visible_warnings))
         base = Group(*parts)
         if process_state is not None and process_state.mode == MODE_HELP:
-            return HelpOverlay(base, process_state, terminal_height, terminal_width)
+            return HelpOverlay(base, process_state, terminal_height, terminal_width, snapshot.gpus)
         if process_state is not None and process_state.mode == MODE_PROCESS_INFO:
             return PopupOverlay(
                 base,
@@ -224,6 +226,7 @@ def render_header(
     process_count: int = 0,
     display_time: datetime | None = None,
     show_subsecond_time: bool = False,
+    terminal_width: int | None = None,
 ) -> Panel:
     title = Text("roctop", style=f"bold {DRACULA_CYAN}")
     if snapshot.node_name:
@@ -243,14 +246,19 @@ def render_header(
     if architectures:
         details.append("   Architecture: ", style=DRACULA_DIM)
         details.append(architectures, style=DRACULA_CYAN)
+    guide = Text(no_wrap=True, overflow="crop")
     if process_state is not None:
-        details.append("\n")
-        append_process_help(details)
+        append_process_help(guide, snapshot.gpus, process_help_separator(terminal_width))
     else:
-        details.append("\n")
-        details.append("Ctrl-C: ", style=f"bold {DRACULA_ORANGE}")
-        details.append("quit", style=DRACULA_DIM)
-    return Panel(details, title=title, border_style=DRACULA_DIM, box=box.SQUARE)
+        guide.append("Ctrl-C: ", style=f"bold {DRACULA_ORANGE}")
+        guide.append("quit", style=DRACULA_DIM)
+    return Panel(
+        Group(details, guide),
+        title=title,
+        border_style=DRACULA_DIM,
+        box=box.SQUARE,
+        padding=(0, 0),
+    )
 
 
 def format_header_timestamp(timestamp: datetime, show_subsecond_time: bool = False) -> str:
@@ -260,25 +268,59 @@ def format_header_timestamp(timestamp: datetime, show_subsecond_time: bool = Fal
     return f"{timestamp.strftime('%a %b %d %H:%M:%S')}.{tenth} {timestamp.strftime('%Y')}"
 
 
-def append_process_help(details: Text) -> None:
-    append_keybinding(details, "s", "sort", leading_space=False)
-    append_keybinding(details, "t", "tree")
-    append_keybinding(details, "/", "search")
-    append_keybinding(details, "f", "filter")
-    append_keybinding(details, "i", "info")
-    append_keybinding(details, "x", "kill")
-    append_keybinding(details, "?", "help")
-    append_keybinding(details, "q", "quit")
+def process_help_separator(terminal_width: int | None) -> str:
+    return "  " if terminal_width is not None and terminal_width >= 90 else " "
 
 
-def append_keybinding(details: Text, key: str, action: str, leading_space: bool = True) -> None:
+def append_process_help(
+    details: Text,
+    gpus: Sequence[GpuInfo] | None = None,
+    separator: str = " ",
+) -> None:
+    gpu_keys = gpu_filter_key_label(gpus)
+    leading_space = False
+    if gpu_keys:
+        append_keybinding(details, gpu_keys, "gpu", leading_space=False, separator=separator)
+        leading_space = True
+    append_keybinding(details, "s", "sort", leading_space=leading_space, separator=separator)
+    append_keybinding(details, "t", "tree", separator=separator)
+    append_keybinding(details, "/", "search", separator=separator)
+    append_keybinding(details, "f", "filter", separator=separator)
+    append_keybinding(details, "i", "info", separator=separator)
+    append_keybinding(details, "x", "kill", separator=separator)
+    append_keybinding(details, "?", "help", separator=separator)
+    append_keybinding(details, "q", "quit", separator=separator)
+
+
+def append_keybinding(
+    details: Text,
+    key: str,
+    action: str,
+    leading_space: bool = True,
+    separator: str = " ",
+) -> None:
     if leading_space:
-        details.append("  ")
+        details.append(separator)
     details.append(f"{key}: ", style=f"bold {DRACULA_ORANGE}")
     details.append(action, style=DRACULA_DIM)
 
 
-def render_help_popup(process_state: ProcessViewState, terminal_width: int | None = None) -> Panel:
+def gpu_filter_key_label(gpus: Sequence[GpuInfo] | None) -> str:
+    indices = sorted({gpu.index for gpu in gpus or () if 0 <= gpu.index <= 9})
+    if not indices:
+        return ""
+    if indices == list(range(indices[0], indices[-1] + 1)):
+        if indices[0] == indices[-1]:
+            return f"<{indices[0]}>"
+        return f"<{indices[0]}-{indices[-1]}>"
+    return f"<{','.join(str(index) for index in indices)}>"
+
+
+def render_help_popup(
+    process_state: ProcessViewState,
+    terminal_width: int | None = None,
+    gpus: Sequence[GpuInfo] | None = None,
+) -> Panel:
     max_offset = max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
     start = min(max(0, process_state.help_scroll_offset), max_offset)
     end = min(len(HELP_ENTRIES), start + HELP_VISIBLE_ROWS)
@@ -288,7 +330,8 @@ def render_help_popup(process_state: ProcessViewState, terminal_width: int | Non
     table.add_column("ACTION", style=DRACULA_FG, ratio=1)
     table.add_column("MODE", style=DRACULA_DIM, no_wrap=True)
     for key, action, mode in HELP_ENTRIES[start:end]:
-        table.add_row(key, action, mode)
+        display_key = gpu_filter_key_label(gpus) if key == "0-9" else key
+        table.add_row(display_key or key, action, mode)
     table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   ?/Esc: close"
     table.caption_style = DRACULA_DIM
 

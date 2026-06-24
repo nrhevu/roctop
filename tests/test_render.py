@@ -645,6 +645,7 @@ class RenderTests(unittest.TestCase):
     def test_process_help_renders_action_keys_without_navigation_hints(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0), GpuInfo(index=1)],
             processes=[
                 ProcessInfo(gpu_index=0, pid=123, args="python train.py"),
                 ProcessInfo(gpu_index=1, pid=456, args="python serve.py"),
@@ -667,9 +668,11 @@ class RenderTests(unittest.TestCase):
         self.assertIn("t: tree", plain)
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
+        self.assertIn("<0-1>: gpu", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("i: info", plain)
         self.assertIn("q: quit", plain)
+        self.assertLess(plain.index("<0-1>: gpu"), plain.index("s: sort"))
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
         self.assertLess(plain.index("i: info"), plain.index("x: kill"))
         self.assertLess(plain.index("i: info"), plain.index("?: help"))
@@ -677,9 +680,15 @@ class RenderTests(unittest.TestCase):
         self.assertLess(plain.index("?: help"), plain.index("q: quit"))
         self.assertIn("38;2;255;184;108", styled)
 
+        wide_console = Console(width=120, record=True, file=StringIO())
+        wide_console.print(render_snapshot(snapshot, process_state=state, terminal_height=40, terminal_width=120))
+        wide_plain = wide_console.export_text(clear=False)
+        self.assertIn("<0-1>: gpu  s: sort", wide_plain)
+
     def test_help_popup_overlays_process_table_without_reserving_rows(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=index) for index in range(4)],
             processes=[
                 ProcessInfo(gpu_index=0, pid=123, args="python train.py"),
             ],
@@ -699,6 +708,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("ACTION", plain)
         self.assertIn("MODE", plain)
         self.assertIn("Open help / close help", plain)
+        self.assertIn("<0-3>", plain)
+        self.assertIn("Filter processes by GPU id", plain)
         self.assertIn("j/k or Up/Down: scroll", plain)
         self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("?/Esc: close", plain)
@@ -932,6 +943,20 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Filter: train", title_line)
         self.assertIn("python train.py", plain)
         self.assertNotIn("python serve.py", plain)
+
+    def test_active_gpu_filter_renders_caption_and_filters_rows(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
+            ProcessInfo(gpu_index=1, pid=456, user="demo", args="python serve.py"),
+        ]
+        state = ProcessViewState(selected_pid=456, gpu_filter_index=1, viewport_rows=4)
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        plain = console.export_text(clear=False)
+        title_line = next(line for line in plain.splitlines() if "Processes  1/1" in line)
+        self.assertIn("GPU: 1", title_line)
+        self.assertIn("python serve.py", plain)
+        self.assertNotIn("python train.py", plain)
 
     def test_tree_mode_renders_connectors_and_selected_row(self) -> None:
         processes = [

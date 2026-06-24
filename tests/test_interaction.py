@@ -550,6 +550,50 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.filter_input, "")
         self.assertEqual([row.pid for row in state.display_processes(processes)], [100, 101])
 
+    def test_number_key_filters_processes_by_available_gpu_id(self) -> None:
+        processes = [
+            proc(100, gpu_index=0, args="demo::rank-0"),
+            proc(101, gpu_index=1, args="demo::rank-1"),
+            proc(102, gpu_index=1, args="demo::rank-1b"),
+        ]
+        state = ProcessViewState(selected_pid=100, viewport_rows=3)
+
+        result = state.handle_key("1", processes, gpu_indices=[0, 1, 2, 3])
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.gpu_filter_index, 1)
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [101, 102])
+        self.assertEqual(state.selected_pid, 101)
+
+        result = state.handle_key("3", processes, gpu_indices=[0, 1, 2, 3])
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.gpu_filter_index, 3)
+        self.assertEqual(state.display_processes(processes), [])
+        self.assertIsNone(state.selected_pid)
+
+        result = state.handle_key("4", processes, gpu_indices=[0, 1, 2, 3])
+
+        self.assertFalse(result.changed)
+        self.assertEqual(state.gpu_filter_index, 3)
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertIsNone(state.gpu_filter_index)
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [100, 101, 102])
+
+    def test_number_key_remains_text_input_in_filter_mode(self) -> None:
+        processes = [proc(100, gpu_index=1, args="demo::rank-1")]
+        state = ProcessViewState(viewport_rows=3)
+
+        state.handle_key("f", processes)
+        state.handle_key("1", processes, gpu_indices=[0, 1])
+
+        self.assertEqual(state.mode, MODE_FILTER)
+        self.assertEqual(state.filter_query, "1")
+        self.assertIsNone(state.gpu_filter_index)
+
     def test_search_next_and_previous_wrap_in_sorted_order(self) -> None:
         processes = [
             proc(1, cpu_percent=10.0, args="demo::worker low"),

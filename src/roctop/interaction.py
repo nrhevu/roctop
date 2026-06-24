@@ -105,6 +105,7 @@ HELP_ENTRIES = (
     ("/", "Search processes", "normal"),
     ("n/N", "Next/previous search match", "normal"),
     ("f", "Filter processes", "normal"),
+    ("0-9", "Filter processes by GPU id", "normal"),
     ("Esc", "Clear filter or cancel active mode", "normal, menus"),
     ("t", "Toggle process tree", "normal"),
     ("p", "Jump to parent process", "tree"),
@@ -152,6 +153,7 @@ class ProcessViewState:
     search_input: str = ""
     filter_query: str = ""
     filter_input: str = ""
+    gpu_filter_index: int | None = None
 
     def sorted_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         rows = list(processes)
@@ -160,9 +162,11 @@ class ProcessViewState:
     def filtered_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         rows = list(processes)
         query = self.filter_query.strip()
-        if not query:
-            return rows
-        return [proc for proc in rows if process_matches_search(proc, query)]
+        if query:
+            rows = [proc for proc in rows if process_matches_search(proc, query)]
+        if self.gpu_filter_index is not None:
+            rows = [proc for proc in rows if proc.gpu_index == self.gpu_filter_index]
+        return rows
 
     def display_processes(
         self,
@@ -239,6 +243,7 @@ class ProcessViewState:
         processes: list[ProcessInfo],
         kill_func: Callable[[int, signal.Signals], None] = None,
         processes_synced: bool = False,
+        gpu_indices: Iterable[int] | None = None,
     ) -> KeyResult:
         kill_func = kill_func or kill_process
         source_processes = processes
@@ -270,7 +275,14 @@ class ProcessViewState:
         if self.mode == MODE_PROCESS_INFO:
             return self.handle_process_info_key(key)
 
-        if key == KEY_ESC and self.filter_query.strip():
+        if is_gpu_filter_key(key):
+            if self.apply_gpu_filter_key(key, source_processes, gpu_indices):
+                if not processes_synced:
+                    self.sync(self.display_processes(source_processes))
+                return KeyResult(changed=True)
+            return KeyResult()
+
+        if key == KEY_ESC and self.has_filter():
             self.clear_filter()
             if not processes_synced:
                 self.sync(self.display_processes(source_processes))
@@ -459,9 +471,26 @@ class ProcessViewState:
     def apply_filter_input(self) -> None:
         self.filter_query = self.filter_input.strip()
 
+    def apply_gpu_filter_key(
+        self,
+        key: str,
+        processes: Iterable[ProcessInfo],
+        gpu_indices: Iterable[int] | None = None,
+    ) -> bool:
+        gpu_index = int(key)
+        if gpu_index not in available_gpu_indices(processes, gpu_indices):
+            return False
+        self.gpu_filter_index = gpu_index
+        self.clear_status_message()
+        return True
+
+    def has_filter(self) -> bool:
+        return bool(self.filter_query.strip()) or self.gpu_filter_index is not None
+
     def clear_filter(self) -> None:
         self.filter_input = ""
         self.filter_query = ""
+        self.gpu_filter_index = None
         self.clear_status_message()
 
     def handle_kill_confirm_key(
@@ -647,6 +676,8 @@ class ProcessViewState:
         parts = []
         if self.status_message:
             parts.append(self.status_message)
+        if self.gpu_filter_index is not None:
+            parts.append(f"GPU: {self.gpu_filter_index}")
         if self.filter_query.strip() and self.mode != MODE_FILTER:
             parts.append(f"Filter: {self.filter_query.strip()}")
         return "   ".join(parts)
@@ -750,6 +781,19 @@ def parse_key_input(data: bytes | str, flush_incomplete: bool = False) -> tuple[
 
 def is_printable_key(key: str) -> bool:
     return len(key) == 1 and key.isprintable()
+
+
+def is_gpu_filter_key(key: str) -> bool:
+    return len(key) == 1 and "0" <= key <= "9"
+
+
+def available_gpu_indices(
+    processes: Iterable[ProcessInfo],
+    gpu_indices: Iterable[int] | None = None,
+) -> set[int]:
+    if gpu_indices is not None:
+        return {index for index in gpu_indices if 0 <= index <= 9}
+    return {proc.gpu_index for proc in processes if proc.gpu_index is not None and 0 <= proc.gpu_index <= 9}
 
 
 def process_matches_search(proc: ProcessInfo, query: str) -> bool:

@@ -13,7 +13,7 @@ from rich.console import Console
 from roctop import cli
 from roctop.collectors import CommandInterrupted, CommandTimeout
 from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP, MODE_HELP, MODE_NORMAL, MODE_PROCESS_INFO
-from roctop.models import ProcessDetailInfo, ProcessInfo, Snapshot
+from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 
 
 @dataclass(frozen=True)
@@ -703,7 +703,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.selected_pid, 3)
 
     def test_handle_key_batch_escape_clears_active_filter(self) -> None:
-        state = cli.ProcessViewState(filter_query="train", filter_input="train")
+        state = cli.ProcessViewState(filter_query="train", filter_input="train", gpu_filter_index=0)
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
             processes=[
@@ -717,7 +717,33 @@ class CliTests(unittest.TestCase):
         self.assertFalse(quit_requested)
         self.assertEqual(state.filter_query, "")
         self.assertEqual(state.filter_input, "")
+        self.assertIsNone(state.gpu_filter_index)
         self.assertEqual([row.pid for row in processes], [1, 2])
+
+    def test_handle_key_batch_filters_by_gpu_number_from_snapshot_gpus(self) -> None:
+        state = cli.ProcessViewState(selected_pid=1)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0), GpuInfo(index=1), GpuInfo(index=2)],
+            processes=[
+                ProcessInfo(gpu_index=0, pid=1, args="rank-0"),
+                ProcessInfo(gpu_index=1, pid=2, args="rank-1"),
+            ],
+        )
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["2"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.gpu_filter_index, 2)
+        self.assertEqual(processes, [])
+        self.assertIsNone(state.selected_pid)
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["1"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.gpu_filter_index, 1)
+        self.assertEqual([row.pid for row in processes], [2])
+        self.assertEqual(state.selected_pid, 2)
 
     def test_handle_key_batch_recomputes_processes_after_tree_toggle(self) -> None:
         state = cli.ProcessViewState(selected_pid=42)
