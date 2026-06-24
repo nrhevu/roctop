@@ -278,13 +278,13 @@ def handle_key_batch(
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
     processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
-    process_state.sync(processes)
+    process_state.sync(processes, adjust_scroll=False)
     processes_dirty = False
     with profile_span("key-handling"):
         for key in keys:
             if processes_dirty and key_needs_current_processes(process_state, key):
                 processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
-                process_state.sync(processes)
+                process_state.sync(processes, adjust_scroll=False)
                 processes_dirty = False
             if key == "i" and process_state.mode == MODE_NORMAL:
                 open_selected_process_info(snapshot, process_state, processes)
@@ -296,7 +296,7 @@ def handle_key_batch(
                 processes_dirty = True
         if processes_dirty:
             processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
-            process_state.sync(processes)
+            process_state.sync(processes, adjust_scroll=False)
     return quit_requested, processes
 
 

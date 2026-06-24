@@ -686,7 +686,7 @@ def render_process_table(
     if process_state is not None:
         if not processes_sorted:
             display_processes = process_state.display_processes(display_processes, process_ancestors)
-        process_state.sync(display_processes, viewport_rows=max_rows)
+        process_state.sync(display_processes, viewport_rows=max_rows, adjust_scroll=False)
         title = render_process_title(process_state, len(display_processes))
         tree_prefixes = process_tree_prefixes(display_processes) if process_state.tree_mode else {}
         display_rows = visible_process_window(
@@ -883,22 +883,35 @@ def visible_process_window(
                 wrapped_rows[index] = row
             return row
 
-        start = selected_index
-        end = selected_index + 1
-        used_rows = row_at(selected_index).visual_height
+        def window_from(start_index: int) -> tuple[int, bool]:
+            used_rows = 0
+            end_index = start_index
+            selected_visible = False
+            while end_index < len(processes):
+                row = row_at(end_index)
+                if used_rows > 0 and used_rows + row.visual_height > max_visual_rows:
+                    break
+                used_rows += row.visual_height
+                if end_index == selected_index:
+                    selected_visible = True
+                end_index += 1
+            return end_index, selected_visible
 
-        while start > 0:
-            row = row_at(start - 1)
-            if used_rows + row.visual_height > max_visual_rows:
-                break
-            start -= 1
-            used_rows += row.visual_height
-        while end < len(processes):
-            row = row_at(end)
-            if used_rows + row.visual_height > max_visual_rows:
-                break
-            used_rows += row.visual_height
-            end += 1
+        start = max(0, min(process_state.scroll_offset, len(processes) - 1))
+        end, selected_visible = window_from(start)
+        if not selected_visible:
+            if selected_index < start:
+                start = selected_index
+            else:
+                start = selected_index
+                used_rows = row_at(selected_index).visual_height
+                while start > 0:
+                    row = row_at(start - 1)
+                    if used_rows + row.visual_height > max_visual_rows:
+                        break
+                    start -= 1
+                    used_rows += row.visual_height
+            end, _ = window_from(start)
 
         process_state.scroll_offset = start
         return [row_at(index) for index in range(start, end)]

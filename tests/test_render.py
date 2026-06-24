@@ -9,8 +9,17 @@ from rich.console import Console, Group
 from rich.text import Text
 
 import roctop.render as render
+from roctop.cli import handle_key_batch
 from roctop.history import MetricSample, MetricsHistory
-from roctop.interaction import MODE_FILTER, MODE_HELP, MODE_KILL_CONFIRM, MODE_PROCESS_INFO, MODE_SEARCH, ProcessViewState
+from roctop.interaction import (
+    KEY_UP,
+    MODE_FILTER,
+    MODE_HELP,
+    MODE_KILL_CONFIRM,
+    MODE_PROCESS_INFO,
+    MODE_SEARCH,
+    ProcessViewState,
+)
 from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
@@ -429,6 +438,107 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(selected_lines), 1)
         self.assertIn("cmd on gpu 1", selected_lines[0])
         self.assertNotIn("cmd on gpu 0", selected_lines[0])
+
+    def test_process_window_moves_cursor_up_before_scrolling(self) -> None:
+        long_args = (
+            "demo_compile_worker --pickler torch_worker_pool --kind fork --workers 32 "
+            "--parent 365 --read-fd 72 --write-fd 77 --cache-key demo"
+        )
+        processes = [
+            ProcessInfo(gpu_index=None, pid=9000 + index, user="demo", args=long_args)
+            for index in range(23)
+        ]
+        snapshot = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0), processes=processes)
+        state = ProcessViewState(selected_pid=9015, viewport_rows=12)
+
+        def visible_pids(display_processes=None) -> list[int]:
+            console = Console(width=150, record=True, file=StringIO())
+            console.print(
+                render_process_table(
+                    display_processes or processes,
+                    process_state=state,
+                    max_rows=12,
+                    terminal_width=150,
+                    processes_sorted=display_processes is not None,
+                )
+            )
+            output = console.export_text()
+            return [proc.pid for proc in processes if str(proc.pid) in output]
+
+        before_pids = visible_pids()
+        self.assertEqual(before_pids[-1], 9015)
+
+        _quit_requested, display_processes = handle_key_batch(snapshot, state, [KEY_UP])
+        after_pids = visible_pids(display_processes)
+
+        self.assertEqual(after_pids, before_pids)
+        self.assertEqual(state.selected_pid, 9014)
+        self.assertEqual(after_pids.index(state.selected_pid), len(after_pids) - 2)
+
+    def test_tree_window_moves_cursor_up_before_scrolling_after_key_batch(self) -> None:
+        parent_args = (
+            "demo_server --model-path demo-model --host 0.0.0.0 --port 30054 "
+            "--tensor-parallel-size 4 --context-length 32768 --watchdog-timeout 1200"
+        )
+        worker_args = (
+            "demo_compile_worker --pickler torch_worker_pool --kind fork --workers 32 "
+            "--parent 254 --read-fd 119 --write-fd 122 --cache-key demo"
+        )
+        ancestors = [
+            ProcessInfo(gpu_index=None, pid=7000, user="demo", args="demo_init"),
+            ProcessInfo(gpu_index=None, pid=7001, user="demo", ppid=7000, args=parent_args),
+        ]
+        processes: list[ProcessInfo] = []
+        for index in range(8):
+            scheduler_pid = 7100 + index
+            processes.append(
+                ProcessInfo(
+                    gpu_index=index if index < 4 else None,
+                    pid=scheduler_pid,
+                    user="demo",
+                    ppid=7001,
+                    args=f"demo::scheduler_TP{index}",
+                )
+            )
+            processes.append(
+                ProcessInfo(
+                    gpu_index=None,
+                    pid=7200 + index,
+                    user="demo",
+                    ppid=scheduler_pid,
+                    args=worker_args,
+                )
+            )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=processes,
+            process_ancestors=ancestors,
+        )
+        state = ProcessViewState(selected_pid=7103, tree_mode=True, viewport_rows=12)
+
+        def visible_pids(display_processes=None) -> list[int]:
+            console = Console(width=150, record=True, file=StringIO())
+            console.print(
+                render_snapshot(
+                    snapshot,
+                    process_state=state,
+                    terminal_height=24,
+                    terminal_width=150,
+                    display_processes=display_processes,
+                )
+            )
+            output = console.export_text()
+            return [proc.pid for proc in (*ancestors, *processes) if str(proc.pid) in output]
+
+        before_pids = visible_pids()
+        self.assertEqual(before_pids[-1], 7103)
+
+        _quit_requested, display_processes = handle_key_batch(snapshot, state, [KEY_UP])
+        after_pids = visible_pids(display_processes)
+
+        self.assertEqual(after_pids, before_pids)
+        self.assertEqual(state.selected_pid, 7202)
+        self.assertEqual(after_pids.index(state.selected_pid), len(after_pids) - 2)
 
     def test_process_help_renders_action_keys_without_navigation_hints(self) -> None:
         snapshot = Snapshot(

@@ -172,7 +172,12 @@ class ProcessViewState:
     def tree_processes(self, rows: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         return flatten_process_tree(rows, self.sort_field, self.sort_desc)
 
-    def sync(self, processes: list[ProcessInfo], viewport_rows: int | None = None) -> None:
+    def sync(
+        self,
+        processes: list[ProcessInfo],
+        viewport_rows: int | None = None,
+        adjust_scroll: bool = True,
+    ) -> None:
         if viewport_rows is not None:
             self.viewport_rows = max(1, viewport_rows)
         if not processes:
@@ -191,7 +196,8 @@ class ProcessViewState:
             match_index = clamp(self.selected_index, 0, len(processes) - 1)
         self.select_index(processes, match_index)
 
-        self.ensure_selected_visible(len(processes))
+        if adjust_scroll:
+            self.ensure_selected_visible(len(processes))
 
     def visible_processes(self, processes: list[ProcessInfo]) -> list[ProcessInfo]:
         self.sync(processes)
@@ -511,6 +517,8 @@ class ProcessViewState:
             self.sync(processes)
             return
         self.select_index(processes, clamp(self.selected_index + delta, 0, len(processes) - 1))
+        if abs(delta) == 1:
+            return
         self.ensure_selected_visible(len(processes))
 
     def select_parent_process(self, processes: list[ProcessInfo]) -> None:
