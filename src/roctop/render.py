@@ -4,7 +4,7 @@ import math
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Sequence
+from typing import Callable, Sequence
 
 from rich import box
 from rich.console import Console, ConsoleOptions, Group, RenderResult
@@ -24,8 +24,10 @@ from .interaction import (
     MODE_FILTER,
     MODE_HELP,
     MODE_KILL_CONFIRM,
+    MODE_PROCESS_INFO,
     MODE_SEARCH,
     MODE_SORT_MENU,
+    PROCESS_INFO_VISIBLE_ROWS,
     SORT_DEFAULT,
     SORT_LABELS,
     SORT_OPTIONS,
@@ -85,9 +87,9 @@ class ProgressText:
 
 
 @dataclass(frozen=True, slots=True)
-class HelpOverlay:
+class PopupOverlay:
     base: object
-    process_state: ProcessViewState
+    popup_factory: Callable[[int], object]
     terminal_height: int | None
     terminal_width: int | None
 
@@ -102,7 +104,7 @@ class HelpOverlay:
             Segment.adjust_line_length(line, width, pad=True)
             for line in console.render_lines(self.base, render_options, pad=True)
         ]
-        popup_lines = console.render_lines(render_help_popup(self.process_state, width), render_options, pad=False)
+        popup_lines = console.render_lines(self.popup_factory(width), render_options, pad=False)
         if not popup_lines:
             yield from self._render_lines(base_lines)
             return
@@ -135,6 +137,15 @@ class HelpOverlay:
                 yield Segment.line()
 
 
+def HelpOverlay(
+    base: object,
+    process_state: ProcessViewState,
+    terminal_height: int | None,
+    terminal_width: int | None,
+) -> PopupOverlay:
+    return PopupOverlay(base, lambda width: render_help_popup(process_state, width), terminal_height, terminal_width)
+
+
 def render_snapshot(
     snapshot: Snapshot,
     history: MetricsHistory | None = None,
@@ -144,7 +155,7 @@ def render_snapshot(
     display_processes: list[ProcessInfo] | None = None,
     display_time: datetime | None = None,
     show_subsecond_time: bool = False,
-) -> Group | HelpOverlay:
+) -> Group | PopupOverlay:
     with profile_span("render"):
         gpu_table = render_gpu_table(snapshot.gpus)
         process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state)
@@ -173,6 +184,13 @@ def render_snapshot(
         base = Group(*parts)
         if process_state is not None and process_state.mode == MODE_HELP:
             return HelpOverlay(base, process_state, terminal_height, terminal_width)
+        if process_state is not None and process_state.mode == MODE_PROCESS_INFO:
+            return PopupOverlay(
+                base,
+                lambda width: render_process_info_popup(snapshot, process_state, width),
+                terminal_height,
+                terminal_width,
+            )
         return base
 
 
@@ -244,13 +262,14 @@ def append_process_help(details: Text) -> None:
     append_keybinding(details, "/", "search")
     append_keybinding(details, "f", "filter")
     append_keybinding(details, "x", "kill")
+    append_keybinding(details, "i", "info")
     append_keybinding(details, "?", "help")
     append_keybinding(details, "q", "quit")
 
 
 def append_keybinding(details: Text, key: str, action: str, leading_space: bool = True) -> None:
     if leading_space:
-        details.append("   ")
+        details.append("  ")
     details.append(f"{key}: ", style=f"bold {DRACULA_ORANGE}")
     details.append(action, style=DRACULA_DIM)
 
@@ -278,6 +297,124 @@ def render_help_popup(process_state: ProcessViewState, terminal_width: int | Non
         box=box.SQUARE,
         width=panel_width,
     )
+
+
+def render_process_info_popup(
+    snapshot: Snapshot,
+    process_state: ProcessViewState,
+    terminal_width: int | None = None,
+) -> Panel:
+    rows = process_info_rows(snapshot, process_state)
+    max_offset = max(0, len(rows) - PROCESS_INFO_VISIBLE_ROWS)
+    start = min(max(0, process_state.process_info_scroll_offset), max_offset)
+    end = min(len(rows), start + PROCESS_INFO_VISIBLE_ROWS)
+
+    table = Table(box=box.SIMPLE, expand=True, show_header=False, show_lines=False, padding=(0, 1))
+    table.add_column("FIELD", style=DRACULA_DIM, no_wrap=True)
+    table.add_column("VALUE", style=DRACULA_FG, ratio=1, overflow="fold")
+    for label, value in rows[start:end]:
+        table.add_row(label, value or "-")
+    table.caption = "Up/Down: scroll   Left/Right: page   i/Esc: close"
+    table.caption_style = DRACULA_DIM
+
+    proc = process_state.process_info_process
+    title = f"Process  {proc.pid}" if proc is not None else "Process"
+    available_width = terminal_width or 88
+    panel_width = min(128, max(1, available_width - 4))
+    return Panel(
+        table,
+        title=Text(title, style=f"bold {DRACULA_CYAN}"),
+        border_style=DRACULA_CYAN,
+        box=box.SQUARE,
+        width=panel_width,
+    )
+
+
+def process_info_rows(snapshot: Snapshot, process_state: ProcessViewState) -> list[tuple[str, str]]:
+    proc = process_state.process_info_process
+    if proc is None:
+        return [("Status", "No process selected")]
+
+    detail = process_state.process_info_detail
+    gpu = next((gpu for gpu in snapshot.gpus if gpu.index == proc.gpu_index), None)
+    rows = [
+        ("PID", str(proc.pid)),
+        ("PPID", "-" if proc.ppid is None else str(proc.ppid)),
+        ("User", proc.user or "-"),
+        ("Name", proc.name or proc.command or "-"),
+        ("Row type", "GPU process" if proc.gpu_index is not None else "Ancestor/context"),
+        ("GPU", "-" if proc.gpu_index is None else str(proc.gpu_index)),
+        ("GPU model", process_info_gpu_model(gpu)),
+        ("GPU GUID", gpu.guid if gpu is not None and gpu.guid else "-"),
+        ("GPU memory", process_info_gpu_memory(proc)),
+        ("CPU", process_info_percent(proc.cpu_percent)),
+        ("Host memory", process_info_percent(proc.host_mem_percent)),
+        ("Elapsed", proc.elapsed or "-"),
+        ("Parent", process_info_parent(process_state)),
+        ("Visible children", str(process_state.process_info_child_count)),
+        ("Command", process_command(proc) or "-"),
+    ]
+    if detail is None:
+        rows.append(("Status", "No /proc detail loaded"))
+        return rows
+
+    rows.extend(
+        [
+            ("Cmdline", detail.cmdline or "-"),
+            ("State", detail.state or "-"),
+            ("Threads", "-" if detail.threads is None else str(detail.threads)),
+            ("VmRSS", process_info_kib(detail.vm_rss_kib)),
+            ("VmSize", process_info_kib(detail.vm_size_kib)),
+            ("VmHWM", process_info_kib(detail.vm_hwm_kib)),
+            ("CPU affinity", detail.cpu_allowed_list or "-"),
+            ("Cwd", detail.cwd or "-"),
+            ("Exe", detail.exe or "-"),
+            (
+                "Ctx switches",
+                f"{process_info_int(detail.voluntary_ctxt_switches)} voluntary / "
+                f"{process_info_int(detail.nonvoluntary_ctxt_switches)} nonvoluntary",
+            ),
+        ]
+    )
+    if detail.error:
+        rows.append(("Status", detail.error))
+    return rows
+
+
+def process_info_gpu_model(gpu: GpuInfo | None) -> str:
+    if gpu is None:
+        return "-"
+    return gpu.gpu_type or gpu.name or "-"
+
+
+def process_info_gpu_memory(proc: ProcessInfo) -> str:
+    return f"{format_bytes_mib(proc.gpu_memory_bytes)} ({percent_text(proc.gpu_memory_percent, digits=1)})"
+
+
+def process_info_percent(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.1f}%"
+
+
+def process_info_kib(value: int | None) -> str:
+    if value is None:
+        return "-"
+    return format_bytes_mib(value * 1024)
+
+
+def process_info_int(value: int | None) -> str:
+    return "-" if value is None else str(value)
+
+
+def process_info_parent(process_state: ProcessViewState) -> str:
+    parent = process_state.process_info_parent
+    if parent is not None:
+        return f"{parent.pid} {process_command(parent)}".strip()
+    proc = process_state.process_info_process
+    if proc is not None and proc.ppid is not None:
+        return str(proc.ppid)
+    return "-"
 
 
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:

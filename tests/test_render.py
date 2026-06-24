@@ -10,8 +10,8 @@ from rich.text import Text
 
 import roctop.render as render
 from roctop.history import MetricSample, MetricsHistory
-from roctop.interaction import MODE_FILTER, MODE_HELP, MODE_KILL_CONFIRM, MODE_SEARCH, ProcessViewState
-from roctop.models import GpuInfo, ProcessInfo, Snapshot
+from roctop.interaction import MODE_FILTER, MODE_HELP, MODE_KILL_CONFIRM, MODE_PROCESS_INFO, MODE_SEARCH, ProcessViewState
+from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
     estimate_process_view_rows,
@@ -456,8 +456,11 @@ class RenderTests(unittest.TestCase):
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
         self.assertIn("x: kill", plain)
+        self.assertIn("i: info", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
+        self.assertLess(plain.index("x: kill"), plain.index("i: info"))
+        self.assertLess(plain.index("i: info"), plain.index("?: help"))
         self.assertLess(plain.index("x: kill"), plain.index("?: help"))
         self.assertLess(plain.index("?: help"), plain.index("q: quit"))
         self.assertIn("38;2;255;184;108", styled)
@@ -500,6 +503,76 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(help_row.startswith("L"))
         self.assertTrue(help_row.rstrip().endswith("R"))
         self.assertIn("normal, help", help_row)
+
+    def test_process_info_popup_renders_selected_process_details(self) -> None:
+        process = ProcessInfo(
+            gpu_index=0,
+            pid=42,
+            ppid=7,
+            user="demo",
+            cpu_percent=12.5,
+            host_mem_percent=3.2,
+            elapsed="01:02",
+            name="python",
+            command="python",
+            args="python train.py --really-long-flag value",
+            gpu_memory_bytes=512 * 1024 * 1024,
+            gpu_memory_percent=25.0,
+        )
+        parent = ProcessInfo(gpu_index=None, pid=7, user="demo", args="bash launcher")
+        detail = ProcessDetailInfo(
+            pid=42,
+            state="S (sleeping)",
+            threads=9,
+            vm_rss_kib=2048,
+            vm_size_kib=4096,
+            vm_hwm_kib=8192,
+            cpu_allowed_list="0-3",
+            voluntary_ctxt_switches=12,
+            nonvoluntary_ctxt_switches=3,
+            cmdline="python train.py --really-long-flag value",
+            cwd="/work/demo",
+            exe="/usr/bin/python",
+        )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(index=0, name="AMD GPU", gpu_type="AMD Instinct MI350X", guid="29921"),
+            ],
+            processes=[process],
+            process_ancestors=[parent],
+        )
+        state = ProcessViewState(selected_pid=42, mode=MODE_PROCESS_INFO, viewport_rows=4)
+        state.open_process_info(process, detail, parent=parent, child_count=2)
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=45, terminal_width=140))
+        plain = console.export_text(clear=False)
+
+        self.assertIn("Process  42", plain)
+        self.assertIn("PID", plain)
+        self.assertIn("PPID", plain)
+        self.assertIn("demo", plain)
+        self.assertIn("GPU memory", plain)
+        self.assertIn("512MiB", plain)
+        self.assertIn("25.0%", plain)
+        self.assertIn("CPU", plain)
+        self.assertIn("12.5%", plain)
+        self.assertIn("Parent", plain)
+        self.assertIn("7 bash launcher", plain)
+        self.assertIn("Visible children", plain)
+        self.assertIn("S (sleeping)", plain)
+        self.assertIn("Threads", plain)
+        self.assertIn("9", plain)
+        self.assertIn("VmRSS", plain)
+        self.assertIn("2MiB", plain)
+        self.assertIn("CPU affinity", plain)
+        self.assertIn("0-3", plain)
+        self.assertIn("Cwd", plain)
+        self.assertIn("/work/demo", plain)
+        self.assertIn("Exe", plain)
+        self.assertIn("/usr/bin/python", plain)
+        self.assertIn("--really-long-flag", plain)
+        self.assertIn("i/Esc: close", plain)
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
         processes = [

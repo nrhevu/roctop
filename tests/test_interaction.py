@@ -16,15 +16,17 @@ from roctop.interaction import (
     MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_NORMAL,
+    MODE_PROCESS_INFO,
     MODE_SEARCH,
     MODE_SORT_MENU,
     ProcessViewState,
     STATUS_MESSAGE_SECONDS,
     elapsed_seconds,
     max_help_scroll_offset,
+    max_process_info_scroll_offset,
     parse_keys,
 )
-from roctop.models import ProcessInfo
+from roctop.models import ProcessDetailInfo, ProcessInfo
 
 
 def proc(pid: int, **kwargs) -> ProcessInfo:
@@ -346,6 +348,61 @@ class InteractionTests(unittest.TestCase):
 
         self.assertFalse(result.changed)
         self.assertEqual(state.mode, MODE_HELP)
+        self.assertEqual(state.selected_pid, 100)
+
+    def test_process_info_mode_opens_and_closes_with_i_or_escape(self) -> None:
+        processes = [proc(100)]
+        state = ProcessViewState(selected_pid=100, viewport_rows=4)
+        state.sync(processes)
+        detail = ProcessDetailInfo(pid=100, state="S (sleeping)")
+
+        state.open_process_info(processes[0], detail, child_count=2)
+
+        self.assertEqual(state.mode, MODE_PROCESS_INFO)
+        self.assertEqual(state.process_info_detail, detail)
+        self.assertEqual(state.process_info_child_count, 2)
+        self.assertEqual(state.process_info_scroll_offset, 0)
+
+        result = state.handle_key("i", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.selected_pid, 100)
+
+        state.open_process_info(processes[0], detail)
+        result = state.handle_key("esc", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+
+    def test_process_info_mode_scrolls_and_pages_with_arrows(self) -> None:
+        processes = [proc(100)]
+        state = ProcessViewState(selected_pid=100, viewport_rows=4)
+        state.sync(processes)
+        state.open_process_info(processes[0], ProcessDetailInfo(pid=100))
+
+        state.handle_key(KEY_DOWN, processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, min(1, max_process_info_scroll_offset(state)))
+
+        state.handle_key(KEY_UP, processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, 0)
+
+        state.handle_key(KEY_RIGHT, processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, max_process_info_scroll_offset(state))
+
+        state.handle_key(KEY_LEFT, processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, 0)
+
+    def test_process_info_mode_ignores_normal_controls(self) -> None:
+        processes = [proc(100), proc(101)]
+        state = ProcessViewState(selected_pid=100, viewport_rows=4)
+        state.sync(processes)
+        state.open_process_info(processes[0], ProcessDetailInfo(pid=100))
+
+        result = state.handle_key("j", processes, processes_synced=True)
+
+        self.assertFalse(result.changed)
+        self.assertEqual(state.mode, MODE_PROCESS_INFO)
         self.assertEqual(state.selected_pid, 100)
 
     def test_search_mode_commits_query_and_matches_command_pid_or_user(self) -> None:

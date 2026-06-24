@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.live import Live
 
 from . import __version__
-from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot
+from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot, read_process_detail
 from .history import MetricsHistory
 from .interaction import (
     KEY_DOWN,
@@ -25,6 +25,8 @@ from .interaction import (
     MODE_FILTER,
     MODE_HELP,
     MODE_KILL_CONFIRM,
+    MODE_NORMAL,
+    MODE_PROCESS_INFO,
     MODE_SEARCH,
     MODE_SORT_MENU,
     ProcessViewState,
@@ -283,6 +285,9 @@ def handle_key_batch(
                 processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
                 process_state.sync(processes)
                 processes_dirty = False
+            if key == "i" and process_state.mode == MODE_NORMAL:
+                open_selected_process_info(snapshot, process_state, processes)
+                continue
             view_before = process_view_key(process_state)
             result = process_state.handle_key(key, processes, processes_synced=True)
             quit_requested = quit_requested or result.quit
@@ -308,6 +313,8 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
         return False
     if process_state.mode == MODE_HELP:
         return False
+    if process_state.mode == MODE_PROCESS_INFO:
+        return False
     if process_state.mode == MODE_SORT_MENU:
         return False
     if process_state.mode == MODE_SEARCH:
@@ -316,6 +323,8 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
         return key in ("y", "Y", KEY_ENTER)
     if key == "h":
         return process_state.tree_mode
+    if key == "i":
+        return process_state.mode == MODE_NORMAL
     return key in (
         "j",
         "k",
@@ -331,6 +340,38 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
         "x",
         "p",
     )
+
+
+def open_selected_process_info(
+    snapshot: Snapshot,
+    process_state: ProcessViewState,
+    processes: list[ProcessInfo],
+) -> None:
+    selected = process_state.selected_synced_process(processes)
+    if selected is None:
+        process_state.set_status_message("No process selected")
+        return
+
+    process_state.open_process_info(
+        selected,
+        read_process_detail(selected.pid),
+        parent_process_for(selected, processes, snapshot.processes, snapshot.process_ancestors),
+        child_count=sum(1 for proc in processes if proc.ppid == selected.pid),
+    )
+
+
+def parent_process_for(
+    process: ProcessInfo,
+    display_processes: list[ProcessInfo],
+    gpu_processes: list[ProcessInfo],
+    ancestor_processes: list[ProcessInfo],
+) -> ProcessInfo | None:
+    if process.ppid is None:
+        return None
+    for candidate in (*display_processes, *gpu_processes, *ancestor_processes):
+        if candidate.pid == process.ppid:
+            return candidate
+    return None
 
 
 def render_live_snapshot(

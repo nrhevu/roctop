@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import threading
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from roctop import collectors
@@ -194,6 +196,72 @@ class CollectorTests(unittest.TestCase):
 
         self.assertEqual(rows[42]["ppid"], "7")
         self.assertEqual(rows[42]["args"], "python train.py")
+
+    def test_read_process_detail_reads_proc_fields_without_environ(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc_root = Path(temp_dir)
+            proc_dir = proc_root / "42"
+            proc_dir.mkdir()
+            (proc_dir / "status").write_text(
+                "\n".join(
+                    [
+                        "Name:\tpython",
+                        "State:\tS (sleeping)",
+                        "Threads:\t9",
+                        "VmRSS:\t2048 kB",
+                        "VmSize:\t4096 kB",
+                        "VmHWM:\t8192 kB",
+                        "Cpus_allowed_list:\t0-3",
+                        "voluntary_ctxt_switches:\t12",
+                        "nonvoluntary_ctxt_switches:\t3",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (proc_dir / "cmdline").write_bytes(b"python\0train.py\0--batch\0" + b"4\0")
+            (proc_dir / "environ").write_text("SECRET_TOKEN=do-not-read", encoding="utf-8")
+            cwd_target = proc_root / "work"
+            cwd_target.mkdir()
+            exe_target = proc_root / "python"
+            exe_target.write_text("", encoding="utf-8")
+            (proc_dir / "cwd").symlink_to(cwd_target, target_is_directory=True)
+            (proc_dir / "exe").symlink_to(exe_target)
+
+            detail = collectors.read_process_detail(42, proc_root)
+
+        self.assertEqual(detail.state, "S (sleeping)")
+        self.assertEqual(detail.threads, 9)
+        self.assertEqual(detail.vm_rss_kib, 2048)
+        self.assertEqual(detail.vm_size_kib, 4096)
+        self.assertEqual(detail.vm_hwm_kib, 8192)
+        self.assertEqual(detail.cpu_allowed_list, "0-3")
+        self.assertEqual(detail.voluntary_ctxt_switches, 12)
+        self.assertEqual(detail.nonvoluntary_ctxt_switches, 3)
+        self.assertEqual(detail.cmdline, "python train.py --batch 4")
+        self.assertTrue(detail.cwd.endswith("/work"))
+        self.assertTrue(detail.exe.endswith("/python"))
+        self.assertNotIn("SECRET_TOKEN", str(detail))
+
+    def test_read_process_detail_returns_partial_data_on_missing_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc_root = Path(temp_dir)
+            proc_dir = proc_root / "42"
+            proc_dir.mkdir()
+            (proc_dir / "status").write_text("State:\tR (running)\nThreads:\t1\n", encoding="utf-8")
+            detail = collectors.read_process_detail(42, proc_root)
+
+        self.assertEqual(detail.state, "R (running)")
+        self.assertEqual(detail.threads, 1)
+        self.assertIn("cmdline", detail.error)
+        self.assertIn("cwd", detail.error)
+        self.assertIn("exe", detail.error)
+
+    def test_read_process_detail_reports_missing_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            detail = collectors.read_process_detail(999, Path(temp_dir))
+
+        self.assertEqual(detail.pid, 999)
+        self.assertIn("process exited", detail.error)
 
     def test_collect_snapshot_collects_process_ancestors_without_moving_gpu_rows(self) -> None:
         def fake_run_command(args, timeout=None) -> CommandResult:

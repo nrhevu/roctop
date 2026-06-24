@@ -6,13 +6,14 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
+from unittest.mock import patch
 
 from rich.console import Console
 
 from roctop import cli
 from roctop.collectors import CommandInterrupted, CommandTimeout
-from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP, MODE_HELP, MODE_NORMAL
-from roctop.models import ProcessInfo, Snapshot
+from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP, MODE_HELP, MODE_NORMAL, MODE_PROCESS_INFO
+from roctop.models import ProcessDetailInfo, ProcessInfo, Snapshot
 
 
 @dataclass(frozen=True)
@@ -542,6 +543,51 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.mode, MODE_NORMAL)
         self.assertEqual([row.pid for row in processes], [42])
         self.assertEqual(state.selected_pid, 42)
+
+    def test_handle_key_batch_opens_process_info_with_proc_detail(self) -> None:
+        state = cli.ProcessViewState(selected_pid=42)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=42, ppid=7, args="python train.py"),
+            ],
+            process_ancestors=[
+                ProcessInfo(gpu_index=None, pid=7, args="bash launcher"),
+            ],
+        )
+
+        with patch("roctop.cli.read_process_detail", return_value=ProcessDetailInfo(pid=42, state="S")) as detail_read:
+            quit_requested, processes = cli.handle_key_batch(snapshot, state, ["i"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.mode, MODE_PROCESS_INFO)
+        self.assertEqual(state.process_info_process.pid, 42)
+        self.assertEqual(state.process_info_detail.state, "S")
+        self.assertEqual(state.process_info_parent.pid, 7)
+        self.assertEqual([row.pid for row in processes], [42])
+        detail_read.assert_called_once_with(42)
+
+    def test_handle_key_batch_does_not_read_process_detail_for_other_keys(self) -> None:
+        state = cli.ProcessViewState(selected_pid=42)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=42, args="python train.py"),
+                ProcessInfo(gpu_index=0, pid=43, args="python serve.py"),
+            ],
+        )
+
+        with patch("roctop.cli.read_process_detail") as detail_read:
+            cli.handle_key_batch(snapshot, state, ["j"])
+
+        detail_read.assert_not_called()
+
+    def test_process_info_mode_keys_do_not_need_current_process_display(self) -> None:
+        state = cli.ProcessViewState(mode=MODE_PROCESS_INFO)
+
+        for key in ("i", "j", KEY_LEFT, KEY_RIGHT):
+            with self.subTest(key=key):
+                self.assertFalse(cli.key_needs_current_processes(state, key))
 
     def test_background_collector_schedules_from_collect_start_time(self) -> None:
         interval = 0.12

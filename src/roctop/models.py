@@ -46,6 +46,23 @@ class ProcessInfo:
 
 
 @dataclass(slots=True)
+class ProcessDetailInfo:
+    pid: int
+    state: str = ""
+    threads: int | None = None
+    vm_rss_kib: int | None = None
+    vm_size_kib: int | None = None
+    vm_hwm_kib: int | None = None
+    cpu_allowed_list: str = ""
+    voluntary_ctxt_switches: int | None = None
+    nonvoluntary_ctxt_switches: int | None = None
+    cmdline: str = ""
+    cwd: str = ""
+    exe: str = ""
+    error: str = ""
+
+
+@dataclass(slots=True)
 class Snapshot:
     timestamp: datetime
     node_name: str = ""

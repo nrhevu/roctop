@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .formatting import clamp_percent, parse_int, parse_number
-from .models import GpuInfo, ProcessInfo, Snapshot
+from .models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 from .profiling import profile_span
 
 
@@ -91,6 +91,7 @@ INSTINCT_SERIES_BY_PREFIX = {
 
 _amd_smi_process_backoff_until = 0.0
 _ps_row_cache: dict[int, tuple[float, dict[str, str]]] = {}
+PROC_ROOT = Path("/proc")
 
 
 @dataclass(slots=True)
@@ -546,6 +547,102 @@ def read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
             "args": parts[7] if len(parts) > 7 else parts[6],
         }
     return rows
+
+
+def read_process_detail(pid: int, proc_root: Path | str = PROC_ROOT) -> ProcessDetailInfo:
+    detail = ProcessDetailInfo(pid=pid)
+    proc_dir = Path(proc_root) / str(pid)
+    if not proc_dir.exists():
+        detail.error = "process exited or /proc entry unavailable"
+        return detail
+
+    errors: list[str] = []
+    status_text = read_proc_text(proc_dir / "status", "status", errors)
+    if status_text:
+        apply_process_status(detail, status_text)
+
+    cmdline = read_proc_bytes(proc_dir / "cmdline", "cmdline", errors)
+    if cmdline:
+        detail.cmdline = decode_proc_cmdline(cmdline)
+
+    detail.cwd = read_proc_link(proc_dir / "cwd", "cwd", errors)
+    detail.exe = read_proc_link(proc_dir / "exe", "exe", errors)
+    detail.error = "; ".join(dedupe_preserving_order(errors))
+    return detail
+
+
+def read_proc_text(path: Path, label: str, errors: list[str]) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        errors.append(f"process exited while reading {label}")
+    except PermissionError:
+        errors.append(f"permission denied reading {label}")
+    except OSError as exc:
+        errors.append(f"could not read {label}: {exc}")
+    return ""
+
+
+def read_proc_bytes(path: Path, label: str, errors: list[str]) -> bytes:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        errors.append(f"process exited while reading {label}")
+    except PermissionError:
+        errors.append(f"permission denied reading {label}")
+    except OSError as exc:
+        errors.append(f"could not read {label}: {exc}")
+    return b""
+
+
+def read_proc_link(path: Path, label: str, errors: list[str]) -> str:
+    try:
+        return os.readlink(path)
+    except FileNotFoundError:
+        errors.append(f"process exited while reading {label}")
+    except PermissionError:
+        errors.append(f"permission denied reading {label}")
+    except OSError as exc:
+        errors.append(f"could not read {label}: {exc}")
+    return ""
+
+
+def apply_process_status(detail: ProcessDetailInfo, status_text: str) -> None:
+    fields: dict[str, str] = {}
+    for line in status_text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip()
+
+    detail.state = fields.get("State", detail.state)
+    detail.threads = parse_optional_status_int(fields.get("Threads"), detail.threads)
+    detail.vm_rss_kib = parse_optional_status_int(fields.get("VmRSS"), detail.vm_rss_kib)
+    detail.vm_size_kib = parse_optional_status_int(fields.get("VmSize"), detail.vm_size_kib)
+    detail.vm_hwm_kib = parse_optional_status_int(fields.get("VmHWM"), detail.vm_hwm_kib)
+    detail.cpu_allowed_list = fields.get("Cpus_allowed_list", detail.cpu_allowed_list)
+    detail.voluntary_ctxt_switches = parse_optional_status_int(
+        fields.get("voluntary_ctxt_switches"),
+        detail.voluntary_ctxt_switches,
+    )
+    detail.nonvoluntary_ctxt_switches = parse_optional_status_int(
+        fields.get("nonvoluntary_ctxt_switches"),
+        detail.nonvoluntary_ctxt_switches,
+    )
+
+
+def parse_optional_status_int(value: str | None, default: int | None = None) -> int | None:
+    if value is None:
+        return default
+    match = re.search(r"[-+]?\d+", value.replace(",", ""))
+    if not match:
+        return default
+    return parse_int(match.group(0), default=default if default is not None else 0)
+
+
+def decode_proc_cmdline(cmdline: bytes) -> str:
+    parts = [part.decode("utf-8", errors="replace") for part in cmdline.split(b"\0") if part]
+    return " ".join(parts)
 
 
 def load_json_from_text(text: str) -> Any:

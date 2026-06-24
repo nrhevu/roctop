@@ -10,7 +10,7 @@ import tty
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from .models import ProcessInfo
+from .models import ProcessDetailInfo, ProcessInfo
 
 
 KEY_UP = "up"
@@ -30,6 +30,7 @@ MODE_KILL_CONFIRM = "kill_confirm"
 MODE_SEARCH = "search"
 MODE_FILTER = "filter"
 MODE_HELP = "help"
+MODE_PROCESS_INFO = "process_info"
 
 KILL_CONFIRM_CANCEL = "cancel"
 KILL_CONFIRM_SIGTERM = "sigterm"
@@ -82,6 +83,7 @@ DEFAULT_DESCENDING_SORTS = {
 }
 STATUS_MESSAGE_SECONDS = 3.0
 HELP_VISIBLE_ROWS = 22
+PROCESS_INFO_VISIBLE_ROWS = 24
 HELP_ENTRIES = (
     ("?", "Open help / close help", "normal, help"),
     ("Up / Down", "Scroll help one row", "help"),
@@ -100,6 +102,7 @@ HELP_ENTRIES = (
     ("h / Left", "Jump to previous sibling", "tree"),
     ("l / Right", "Jump to next sibling", "tree"),
     ("x", "Open kill confirmation", "normal"),
+    ("i", "Open selected process details", "normal"),
     ("y", "Send SIGTERM in kill confirmation", "kill"),
     ("q", "Quit or cancel menu", "normal, menus"),
     ("Ctrl-C", "Quit", "all"),
@@ -129,6 +132,11 @@ class ProcessViewState:
     viewport_rows: int = 8
     tree_mode: bool = False
     help_scroll_offset: int = 0
+    process_info_scroll_offset: int = 0
+    process_info_process: ProcessInfo | None = None
+    process_info_detail: ProcessDetailInfo | None = None
+    process_info_parent: ProcessInfo | None = None
+    process_info_child_count: int = 0
     search_query: str = ""
     search_input: str = ""
     filter_query: str = ""
@@ -242,6 +250,9 @@ class ProcessViewState:
         if self.mode == MODE_HELP:
             return self.handle_help_key(key)
 
+        if self.mode == MODE_PROCESS_INFO:
+            return self.handle_process_info_key(key)
+
         if key == KEY_ESC and self.filter_query.strip():
             self.clear_filter()
             if not processes_synced:
@@ -309,6 +320,46 @@ class ProcessViewState:
                 self.mode = MODE_KILL_CONFIRM
                 self.kill_confirm_index = 0
                 self.clear_status_message()
+            return KeyResult(changed=True)
+        return KeyResult()
+
+    def open_process_info(
+        self,
+        process: ProcessInfo,
+        detail: ProcessDetailInfo,
+        parent: ProcessInfo | None = None,
+        child_count: int = 0,
+    ) -> None:
+        self.process_info_process = process
+        self.process_info_detail = detail
+        self.process_info_parent = parent
+        self.process_info_child_count = max(0, child_count)
+        self.process_info_scroll_offset = 0
+        self.mode = MODE_PROCESS_INFO
+        self.clear_status_message()
+
+    def handle_process_info_key(self, key: str) -> KeyResult:
+        if key in (KEY_ESC, "i"):
+            self.mode = MODE_NORMAL
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key == KEY_UP:
+            self.process_info_scroll_offset = max(0, self.process_info_scroll_offset - 1)
+            return KeyResult(changed=True)
+        if key == KEY_DOWN:
+            self.process_info_scroll_offset = min(
+                max_process_info_scroll_offset(self),
+                self.process_info_scroll_offset + 1,
+            )
+            return KeyResult(changed=True)
+        if key == KEY_LEFT:
+            self.process_info_scroll_offset = max(0, self.process_info_scroll_offset - PROCESS_INFO_VISIBLE_ROWS)
+            return KeyResult(changed=True)
+        if key == KEY_RIGHT:
+            self.process_info_scroll_offset = min(
+                max_process_info_scroll_offset(self),
+                self.process_info_scroll_offset + PROCESS_INFO_VISIBLE_ROWS,
+            )
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -855,6 +906,23 @@ def current_sort_menu_index(sort_field: str) -> int:
 
 def max_help_scroll_offset() -> int:
     return max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
+
+
+def max_process_info_scroll_offset(process_state: ProcessViewState) -> int:
+    return max(0, process_info_row_count(process_state) - PROCESS_INFO_VISIBLE_ROWS)
+
+
+def process_info_row_count(process_state: ProcessViewState) -> int:
+    if process_state.process_info_process is None:
+        return 1
+    detail = process_state.process_info_detail
+    count = 15
+    if detail is None:
+        return count + 1
+    count += 10
+    if detail.error:
+        count += 1
+    return count
 
 
 def kill_process(pid: int, kill_signal: signal.Signals = signal.SIGTERM) -> None:
