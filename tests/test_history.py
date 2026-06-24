@@ -68,6 +68,23 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(len(history.samples), 1)
             self.assertIs(history.samples[0], second)
 
+    def test_prime_cpu_allows_first_sample_to_use_delta(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            stat_path = root / "stat"
+            meminfo_path = root / "meminfo"
+            stat_path.write_text("cpu  100 0 100 800 0 0 0 0 0 0\n")
+            meminfo_path.write_text("MemTotal:       1000 kB\nMemAvailable:    400 kB\n")
+
+            history = MetricsHistory(max_samples=1, stat_path=stat_path, meminfo_path=meminfo_path)
+            history.prime_cpu()
+            stat_path.write_text("cpu  150 0 150 900 0 0 0 0 0 0\n")
+
+            sample = history.add_snapshot(Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)))
+
+            self.assertAlmostEqual(sample.avg_cpu_percent, 50.0)
+            self.assertAlmostEqual(sample.avg_mem_percent, 60.0)
+
     def test_malformed_system_metrics_return_none(self) -> None:
         self.assertIsNone(parse_cpu_times("not cpu data\n"))
         self.assertIsNone(parse_mem_percent("MemTotal:       0 kB\n"))

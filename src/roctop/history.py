@@ -45,6 +45,11 @@ class MetricsHistory:
     def append_sample(self, sample: MetricSample) -> None:
         self._samples.append(sample)
 
+    def prime_cpu(self) -> None:
+        cpu_times = read_cpu_times(self.stat_path)
+        if cpu_times is not None:
+            self._previous_cpu_times = cpu_times
+
     def add_snapshot(self, snapshot: Snapshot) -> MetricSample:
         cpu_times = read_cpu_times(self.stat_path)
         cpu_percent = cpu_percent_from_times(self._previous_cpu_times, cpu_times)

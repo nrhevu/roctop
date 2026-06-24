@@ -155,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 def run_live(console: Console, interval: float) -> int:
     history = MetricsHistory(max_samples=1081)
     process_state = ProcessViewState()
+    history.prime_cpu()
     snapshot = collect_snapshot_retry(interval)
     history.add_snapshot(snapshot)
     collector = BackgroundSnapshotCollector(interval)
