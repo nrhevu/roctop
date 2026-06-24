@@ -192,6 +192,44 @@ class InteractionTests(unittest.TestCase):
 
         self.assertEqual([row.pid for row in display], [11])
 
+    def test_tree_mode_p_jumps_to_visible_parent_process(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=10, args="parent"),
+            proc(11, ppid=10, args="child"),
+        ]
+        state = ProcessViewState(selected_pid=11, tree_mode=True, viewport_rows=4)
+        state.sync(processes)
+
+        result = state.handle_key("p", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.selected_pid, 10)
+        self.assertEqual(state.status_message, "")
+
+    def test_tree_mode_p_reports_when_parent_is_not_visible(self) -> None:
+        processes = [proc(11, ppid=10, args="child")]
+        state = ProcessViewState(selected_pid=11, tree_mode=True, viewport_rows=4)
+        state.sync(processes)
+
+        result = state.handle_key("p", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.selected_pid, 11)
+        self.assertEqual(state.status_message, "No visible parent process")
+
+    def test_parent_key_is_ignored_outside_tree_mode(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=10, args="parent"),
+            proc(11, ppid=10, args="child"),
+        ]
+        state = ProcessViewState(selected_pid=11, viewport_rows=4)
+        state.sync(processes)
+
+        result = state.handle_key("p", processes, processes_synced=True)
+
+        self.assertFalse(result.changed)
+        self.assertEqual(state.selected_pid, 11)
+
     def test_search_mode_commits_query_and_matches_command_pid_or_user(self) -> None:
         processes = [
             proc(100, user="alice", args="demo::trainer --batch-size 64"),

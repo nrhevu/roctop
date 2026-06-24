@@ -183,6 +183,7 @@ def format_header_timestamp(timestamp: datetime, show_subsecond_time: bool = Fal
 def append_process_help(details: Text) -> None:
     append_keybinding(details, "s", "sort", leading_space=False)
     append_keybinding(details, "t", "tree")
+    append_keybinding(details, "p", "parent")
     append_keybinding(details, "/", "search")
     append_keybinding(details, "f", "filter")
     append_keybinding(details, "x", "kill")

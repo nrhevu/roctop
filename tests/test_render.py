@@ -450,6 +450,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("n/N: next/prev", plain)
         self.assertIn("s: sort", plain)
         self.assertIn("t: tree", plain)
+        self.assertIn("p: parent", plain)
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
         self.assertIn("x: kill", plain)

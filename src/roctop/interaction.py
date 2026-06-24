@@ -226,6 +226,9 @@ class ProcessViewState:
             self.tree_mode = not self.tree_mode
             self.clear_status_message()
             return KeyResult(changed=True)
+        if key == "p" and self.tree_mode:
+            self.select_parent_process(processes)
+            return KeyResult(changed=True)
         if key in ("j", KEY_DOWN):
             self.move_selection(processes, 1)
             return KeyResult(changed=True)
@@ -400,6 +403,19 @@ class ProcessViewState:
             return
         self.select_index(processes, clamp(self.selected_index + delta, 0, len(processes) - 1))
         self.ensure_selected_visible(len(processes))
+
+    def select_parent_process(self, processes: list[ProcessInfo]) -> None:
+        selected = self.selected_synced_process(processes)
+        if selected is None or selected.ppid is None:
+            self.set_status_message("No visible parent process")
+            return
+        parent_index = find_process_pid_index(processes, selected.ppid)
+        if parent_index is None:
+            self.set_status_message("No visible parent process")
+            return
+        self.select_index(processes, parent_index)
+        self.ensure_selected_visible(len(processes))
+        self.clear_status_message()
 
     def search_next(self, processes: list[ProcessInfo], direction: int, processes_synced: bool = False) -> bool:
         query = self.search_query.strip()
