@@ -29,8 +29,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Render roctop docs/demo.svg from synthetic data.")
     parser.add_argument("--output", default="docs/demo.svg", help="SVG output path. Default: docs/demo.svg")
     parser.add_argument("--seed", type=int, default=20260622, help="Seed for random-walk graph data.")
-    parser.add_argument("--width", type=int, default=180, help="Rich console width.")
-    parser.add_argument("--height", type=int, default=54, help="Terminal height used for layout.")
+    parser.add_argument("--width", type=int, default=240, help="Rich console width.")
+    parser.add_argument("--height", type=int, default=66, help="Terminal height used for layout.")
     args = parser.parse_args()
 
     repo_root = Path.cwd()
@@ -56,6 +56,7 @@ def main() -> int:
         mode="sort_menu",
         sort_menu_index=2,
         viewport_rows=9,
+        tree_mode=True,
     )
 
     console = Console(
@@ -63,6 +64,7 @@ def main() -> int:
         record=True,
         force_terminal=True,
         color_system="truecolor",
+        _environ={"COLUMNS": str(args.width), "LINES": str(args.height)},
         file=StringIO(),
     )
     console.print(render_snapshot(snapshot, history, state, terminal_height=args.height, terminal_width=args.width))
@@ -107,14 +109,18 @@ def build_snapshot() -> object:
             for index in range(8)
         ],
         processes=[
-            proc(0, 420100, "demo::trainer_rank0", "01:26:03", 96.8, 0.3, 266.4, 92.5),
-            proc(1, 420101, "demo::trainer_rank1", "01:26:03", 98.4, 0.3, 258.8, 89.9),
-            proc(2, 420102, "demo::trainer_rank2", "01:25:58", 92.6, 0.2, 241.5, 83.9),
-            proc(3, 420103, "demo::trainer_rank3", "01:25:57", 89.1, 0.2, 221.2, 76.8),
-            proc(4, 420104, "demo::eval_worker", "00:42:17", 74.2, 0.2, 188.4, 65.4),
-            proc(5, 420105, "demo::batch_sampler", "00:39:12", 68.7, 0.2, 176.9, 61.4),
-            proc(6, 420106, "demo::metrics_agent", "00:18:44", 18.5, 0.1, 96.2, 33.4),
-            proc(None, 420107, "demo::preprocess_worker", "01:31:22", 0.4, 0.0, 0.0, 0.0),
+            proc(0, 420100, "demo::trainer_rank0", "01:26:03", 96.8, 0.3, 266.4, 92.5, ppid=419900),
+            proc(1, 420101, "demo::trainer_rank1", "01:26:03", 98.4, 0.3, 258.8, 89.9, ppid=419900),
+            proc(2, 420102, "demo::trainer_rank2", "01:25:58", 92.6, 0.2, 241.5, 83.9, ppid=419900),
+            proc(3, 420103, "demo::trainer_rank3", "01:25:57", 89.1, 0.2, 221.2, 76.8, ppid=419900),
+            proc(4, 420104, "demo::eval_worker", "00:42:17", 74.2, 0.2, 188.4, 65.4, ppid=419900),
+            proc(5, 420105, "demo::batch_sampler", "00:39:12", 68.7, 0.2, 176.9, 61.4, ppid=419900),
+            proc(6, 420106, "demo::metrics_agent", "00:18:44", 18.5, 0.1, 96.2, 33.4, ppid=419900),
+            proc(None, 420107, "demo::preprocess_worker", "01:31:22", 0.4, 0.0, 0.0, 0.0, ppid=419800),
+        ],
+        process_ancestors=[
+            proc(None, 419800, "demo::session", "01:34:10", 0.2, 0.0, 0.0, 0.0),
+            proc(None, 419900, "demo::job_launcher", "01:32:48", 0.8, 0.0, 0.0, 0.0, ppid=419800),
         ],
     )
 
@@ -128,6 +134,7 @@ def proc(
     mem: float,
     gpu_mem_gib: float,
     gpu_mem_percent: float,
+    ppid: int | None = None,
 ) -> object:
     from roctop.models import ProcessInfo
 
@@ -140,6 +147,8 @@ def proc(
         "demo::batch_sampler": "--queue synthetic-batches --prefetch 12 --workers 16",
         "demo::metrics_agent": "--target synthetic-cluster --interval 1s",
         "demo::preprocess_worker": "--input synthetic-corpus --queue demo-preprocess-queue",
+        "demo::session": "--workspace demo-cluster --job synthetic-training",
+        "demo::job_launcher": "--launch synthetic-training --world-size 8 --tree-demo",
     }
     return ProcessInfo(
         gpu_index=gpu_index,
@@ -153,6 +162,7 @@ def proc(
         args=f"{name} {args_by_name[name]}",
         gpu_memory_bytes=int(gpu_mem_gib * 1024**3),
         gpu_memory_percent=gpu_mem_percent,
+        ppid=ppid,
     )
 
 
