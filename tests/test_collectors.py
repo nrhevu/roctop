@@ -8,12 +8,14 @@ from roctop.collectors import (
     CommandInterrupted,
     CommandResult,
     CommandTimeout,
+    collect_process_ancestors,
     collect_snapshot,
     load_json_from_text,
     merge_process_sources,
     parse_amd_pci_models,
     parse_amd_smi_process_json,
     parse_rocm_smi_json,
+    read_ps_rows,
     run_command,
 )
 from roctop.formatting import format_bytes_mib
@@ -149,6 +151,95 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(first[42]["user"], "demo1")
         self.assertEqual(second[42]["user"], "demo1")
         self.assertEqual(third[42]["user"], "demo2")
+
+    def test_read_ps_rows_parses_ppid(self) -> None:
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            return CommandResult(
+                args=args,
+                returncode=0,
+                stdout="42 7 demo 12.5 0.3 01:02 python python train.py\n",
+                stderr="",
+            )
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            rows = read_ps_rows([42])
+
+        self.assertEqual(rows[42]["ppid"], "7")
+        self.assertEqual(rows[42]["args"], "python train.py")
+
+    def test_collect_snapshot_collects_process_ancestors_without_moving_gpu_rows(self) -> None:
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            if args[0] == "rocm-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '{"card0": {"VRAM Total Memory (B)": "1000"}, '
+                        '"system": {"Driver version": "6.14.14"}}'
+                    ),
+                    stderr="",
+                )
+            if args[0] == "amd-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '[{"gpu": 0, "process_list": [{"process_info": '
+                        '{"pid": 42, "name": "python", "mem_usage": {"value": 500}}}]}]'
+                    ),
+                    stderr="",
+                )
+            if args[0] == "ps":
+                pids = args[-1]
+                rows = {
+                    "42": "42 7 demo 1.0 0.2 00:10 python python train.py",
+                    "7": "7 1 demo 0.1 0.1 01:00 bash bash",
+                    "1": "1 0 root 0.0 0.1 02:00 systemd /sbin/init",
+                }
+                stdout = "\n".join(rows[pid] for pid in pids.split(",") if pid in rows)
+                return CommandResult(args=args, returncode=0, stdout=stdout, stderr="")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="")
+
+        with (
+            patch("roctop.collectors.run_command", side_effect=fake_run_command),
+            patch("roctop.collectors.platform.node", return_value="node-a"),
+        ):
+            snapshot = collect_snapshot()
+
+        self.assertEqual([proc.pid for proc in snapshot.processes], [42])
+        self.assertEqual(snapshot.processes[0].ppid, 7)
+        self.assertEqual([proc.pid for proc in snapshot.process_ancestors], [7, 1])
+        self.assertEqual(snapshot.process_ancestors[0].ppid, 1)
+        self.assertEqual(snapshot.process_ancestors[1].ppid, None)
+
+    def test_collect_process_ancestors_dedupes_and_skips_missing_parents(self) -> None:
+        calls: list[list[int]] = []
+
+        def fake_read_ps_rows_cached(pids: list[int]) -> dict[int, dict[str, str]]:
+            calls.append(list(pids))
+            if pids == [7]:
+                return {
+                    7: {
+                        "ppid": "999",
+                        "user": "demo",
+                        "cpu": "0.1",
+                        "mem": "0.1",
+                        "etime": "01:00",
+                        "comm": "bash",
+                        "args": "bash",
+                    }
+                }
+            return {}
+
+        processes = [
+            ProcessInfo(gpu_index=0, pid=42, ppid=7),
+            ProcessInfo(gpu_index=1, pid=43, ppid=7),
+        ]
+        with patch("roctop.collectors.read_ps_rows_cached", side_effect=fake_read_ps_rows_cached):
+            ancestors = collect_process_ancestors(processes)
+
+        self.assertEqual([proc.pid for proc in ancestors], [7])
+        self.assertEqual(calls, [[7], [999]])
 
     def test_parse_rocm_smi_json(self) -> None:
         raw = {

@@ -176,6 +176,7 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
 
     process_rows = merge_process_sources(process_rows, rocm_processes)
     enrich_processes_with_ps(process_rows)
+    process_ancestors = collect_process_ancestors(process_rows)
 
     return Snapshot(
         timestamp=now,
@@ -191,6 +192,7 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
                 proc.pid,
             ),
         ),
+        process_ancestors=process_ancestors,
         warnings=dedupe_preserving_order(warnings),
     )
 
@@ -385,6 +387,7 @@ def enrich_processes_with_ps(processes: list[ProcessInfo]) -> None:
         row = ps_rows.get(proc.pid)
         if not row:
             continue
+        proc.ppid = process_ppid_from_ps_row(row, proc.ppid)
         proc.user = row.get("user", proc.user)
         proc.cpu_percent = parse_number(row.get("cpu"), proc.cpu_percent or 0.0)
         proc.host_mem_percent = parse_number(row.get("mem"), proc.host_mem_percent or 0.0)
@@ -393,6 +396,63 @@ def enrich_processes_with_ps(processes: list[ProcessInfo]) -> None:
         proc.args = row.get("args", proc.args)
         if not proc.name:
             proc.name = proc.command
+
+
+def collect_process_ancestors(processes: list[ProcessInfo]) -> list[ProcessInfo]:
+    known_pids = {proc.pid for proc in processes}
+    seen_pids = set(known_pids)
+    frontier: set[int] = {
+        proc.ppid
+        for proc in processes
+        if proc.ppid is not None and proc.ppid > 0 and proc.ppid not in seen_pids
+    }
+    seen_pids.update(frontier)
+    ancestors: list[ProcessInfo] = []
+
+    while frontier:
+        ps_rows = read_ps_rows_cached(sorted(frontier))
+        next_frontier: set[int] = set()
+        for pid in sorted(frontier):
+            row = ps_rows.get(pid)
+            if not row:
+                continue
+            ancestor = process_from_ps_row(pid, row)
+            ancestors.append(ancestor)
+            if ancestor.ppid is None or ancestor.ppid <= 0:
+                continue
+            if ancestor.ppid in seen_pids:
+                continue
+            seen_pids.add(ancestor.ppid)
+            next_frontier.add(ancestor.ppid)
+        frontier = next_frontier
+
+    return ancestors
+
+
+def process_from_ps_row(pid: int, row: dict[str, str]) -> ProcessInfo:
+    command = row.get("comm", "")
+    return ProcessInfo(
+        gpu_index=None,
+        pid=pid,
+        ppid=process_ppid_from_ps_row(row),
+        name=command,
+        user=row.get("user", ""),
+        cpu_percent=parse_number(row.get("cpu"), 0.0),
+        host_mem_percent=parse_number(row.get("mem"), 0.0),
+        elapsed=row.get("etime", ""),
+        command=command,
+        args=row.get("args", command),
+    )
+
+
+def process_ppid_from_ps_row(row: dict[str, str], default: int | None = None) -> int | None:
+    raw = row.get("ppid")
+    parsed = parse_int(raw, default=-1)
+    if parsed > 0:
+        return parsed
+    if raw is not None and str(raw).strip():
+        return None
+    return default
 
 
 def read_ps_rows_cached(pids: list[int]) -> dict[int, dict[str, str]]:
@@ -425,7 +485,7 @@ def read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
     args = [
         "ps",
         "-o",
-        "pid=,user=,pcpu=,pmem=,etime=,comm=,args=",
+        "pid=,ppid=,user=,pcpu=,pmem=,etime=,comm=,args=",
         "-p",
         ",".join(str(pid) for pid in pids),
     ]
@@ -439,20 +499,21 @@ def read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
-        # pid user pcpu pmem etime comm args
-        parts = line.strip().split(None, 6)
-        if len(parts) < 6:
+        # pid ppid user pcpu pmem etime comm args
+        parts = line.strip().split(None, 7)
+        if len(parts) < 7:
             continue
         pid = parse_int(parts[0], default=-1)
         if pid < 0:
             continue
         rows[pid] = {
-            "user": parts[1],
-            "cpu": parts[2],
-            "mem": parts[3],
-            "etime": parts[4],
-            "comm": parts[5],
-            "args": parts[6] if len(parts) > 6 else parts[5],
+            "ppid": parts[1],
+            "user": parts[2],
+            "cpu": parts[3],
+            "mem": parts[4],
+            "etime": parts[5],
+            "comm": parts[6],
+            "args": parts[7] if len(parts) > 7 else parts[6],
         }
     return rows
 

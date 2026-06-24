@@ -103,6 +103,7 @@ class ProcessViewState:
     status_message: str = ""
     status_message_expires_at: float | None = None
     viewport_rows: int = 8
+    tree_mode: bool = False
     search_query: str = ""
     search_input: str = ""
     filter_query: str = ""
@@ -119,7 +120,14 @@ class ProcessViewState:
             return rows
         return [proc for proc in rows if process_matches_search(proc, query)]
 
-    def display_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
+    def display_processes(
+        self,
+        processes: Iterable[ProcessInfo],
+        process_ancestors: Iterable[ProcessInfo] | None = None,
+    ) -> list[ProcessInfo]:
+        if self.tree_mode:
+            rows = combine_tree_processes(processes, process_ancestors)
+            return self.tree_processes(self.filtered_processes(rows))
         return self.sorted_processes(self.filtered_processes(processes))
 
     def sort_process_rows(self, rows: list[ProcessInfo]) -> list[ProcessInfo]:
@@ -127,6 +135,9 @@ class ProcessViewState:
             return rows
         rows.sort(key=lambda proc: process_sort_key(proc, self.sort_field), reverse=self.sort_desc)
         return rows
+
+    def tree_processes(self, rows: Iterable[ProcessInfo]) -> list[ProcessInfo]:
+        return flatten_process_tree(rows, self.sort_field, self.sort_desc)
 
     def sync(self, processes: list[ProcessInfo], viewport_rows: int | None = None) -> None:
         if viewport_rows is not None:
@@ -211,6 +222,10 @@ class ProcessViewState:
 
         if key == "q":
             return KeyResult(quit=True, changed=True)
+        if key == "t":
+            self.tree_mode = not self.tree_mode
+            self.clear_status_message()
+            return KeyResult(changed=True)
         if key in ("j", KEY_DOWN):
             self.move_selection(processes, 1)
             return KeyResult(changed=True)
@@ -447,9 +462,10 @@ class ProcessViewState:
         return self.process_title(process_count)
 
     def process_title(self, process_count: int) -> str:
+        label = "Process Tree" if self.tree_mode else "Processes"
         if process_count <= 0:
-            return "Processes  0/0"
-        return f"Processes  {self.selected_index + 1}/{process_count}"
+            return f"{label}  0/0"
+        return f"{label}  {self.selected_index + 1}/{process_count}"
 
     def caption(self) -> str:
         parts = []
@@ -582,6 +598,97 @@ def find_process_pid_index(processes: list[ProcessInfo], pid: int) -> int | None
         if proc.pid == pid:
             return index
     return None
+
+
+def combine_tree_processes(
+    processes: Iterable[ProcessInfo],
+    process_ancestors: Iterable[ProcessInfo] | None = None,
+) -> list[ProcessInfo]:
+    rows: list[ProcessInfo] = []
+    seen_keys: set[ProcessSelectionKey] = set()
+    process_pids: set[int] = set()
+    for proc in processes:
+        key = process_selection_key(proc)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        process_pids.add(proc.pid)
+        rows.append(proc)
+
+    for proc in process_ancestors or ():
+        if proc.pid in process_pids:
+            continue
+        key = process_selection_key(proc)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        rows.append(proc)
+    return rows
+
+
+def flatten_process_tree(
+    processes: Iterable[ProcessInfo],
+    sort_field: str = SORT_DEFAULT,
+    sort_desc: bool = True,
+) -> list[ProcessInfo]:
+    rows = list(processes)
+    if not rows:
+        return []
+
+    rows_by_key: dict[ProcessSelectionKey, ProcessInfo] = {}
+    key_by_pid: dict[int, ProcessSelectionKey] = {}
+    ordered_keys: list[ProcessSelectionKey] = []
+    for proc in rows:
+        key = process_selection_key(proc)
+        if key in rows_by_key:
+            continue
+        rows_by_key[key] = proc
+        ordered_keys.append(key)
+        key_by_pid.setdefault(proc.pid, key)
+
+    root_keys: list[ProcessSelectionKey] = []
+    children_by_parent: dict[ProcessSelectionKey, list[ProcessSelectionKey]] = {}
+    for key in ordered_keys:
+        proc = rows_by_key[key]
+        parent_key = key_by_pid.get(proc.ppid or -1)
+        if parent_key is None or parent_key == key:
+            root_keys.append(key)
+            continue
+        children_by_parent.setdefault(parent_key, []).append(key)
+
+    flattened: list[ProcessInfo] = []
+    visited: set[ProcessSelectionKey] = set()
+
+    def append_branch(key: ProcessSelectionKey) -> None:
+        if key in visited:
+            return
+        visited.add(key)
+        flattened.append(rows_by_key[key])
+        for child_key in sorted_tree_keys(children_by_parent.get(key, []), rows_by_key, sort_field, sort_desc):
+            append_branch(child_key)
+
+    for key in sorted_tree_keys(root_keys, rows_by_key, sort_field, sort_desc):
+        append_branch(key)
+    for key in ordered_keys:
+        append_branch(key)
+
+    return flattened
+
+
+def sorted_tree_keys(
+    keys: list[ProcessSelectionKey],
+    rows_by_key: dict[ProcessSelectionKey, ProcessInfo],
+    sort_field: str,
+    sort_desc: bool,
+) -> list[ProcessSelectionKey]:
+    if sort_field == SORT_DEFAULT:
+        return sorted(keys, key=lambda key: default_tree_sort_key(rows_by_key[key]))
+    return sorted(keys, key=lambda key: process_sort_key(rows_by_key[key], sort_field), reverse=sort_desc)
+
+
+def default_tree_sort_key(proc: ProcessInfo) -> tuple[int, bool, int]:
+    gpu_index = proc.gpu_index if proc.gpu_index is not None else 9999
+    return (proc.pid, proc.gpu_index is None, gpu_index)
 
 
 def process_sort_key(proc: ProcessInfo, field: str):

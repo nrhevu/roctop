@@ -26,6 +26,7 @@ from .interaction import (
     SORT_LABELS,
     SORT_OPTIONS,
     ProcessViewState,
+    process_selection_key,
 )
 from .models import GpuInfo, ProcessInfo, Snapshot
 from .profiling import profile_span
@@ -98,6 +99,7 @@ def render_snapshot(
             max_rows=process_rows,
             terminal_width=terminal_width,
             processes_sorted=display_processes is not None,
+            process_ancestors=snapshot.process_ancestors,
         )
         header = render_header(
             snapshot,
@@ -180,6 +182,7 @@ def format_header_timestamp(timestamp: datetime, show_subsecond_time: bool = Fal
 
 def append_process_help(details: Text) -> None:
     append_keybinding(details, "s", "sort", leading_space=False)
+    append_keybinding(details, "t", "tree")
     append_keybinding(details, "/", "search")
     append_keybinding(details, "f", "filter")
     append_keybinding(details, "x", "kill")
@@ -452,6 +455,7 @@ def render_process_table(
     max_rows: int | None = None,
     terminal_width: int | None = None,
     processes_sorted: bool = False,
+    process_ancestors: list[ProcessInfo] | None = None,
 ) -> Table:
     display_processes = list(processes)
     process_count = len(display_processes)
@@ -460,10 +464,17 @@ def render_process_table(
     command_width = estimate_process_command_width(terminal_width)
     if process_state is not None:
         if not processes_sorted:
-            display_processes = process_state.display_processes(display_processes)
+            display_processes = process_state.display_processes(display_processes, process_ancestors)
         process_state.sync(display_processes, viewport_rows=max_rows)
         title = render_process_title(process_state, len(display_processes))
-        display_rows = visible_process_window(display_processes, process_state, max_rows, command_width)
+        tree_prefixes = process_tree_prefixes(display_processes) if process_state.tree_mode else {}
+        display_rows = visible_process_window(
+            display_processes,
+            process_state,
+            max_rows,
+            command_width,
+            tree_prefixes=tree_prefixes,
+        )
     else:
         if max_rows is not None and len(display_processes) > max_rows:
             display_processes = display_processes[: max(1, max_rows)]
@@ -507,6 +518,7 @@ def render_process_table(
         proc = row.process
         gpu = "-" if proc.gpu_index is None else str(proc.gpu_index)
         command = row.command
+        command_cell = Text(command, no_wrap=True, overflow="crop") if process_state is not None else command
         gpu_mem_style = percent_style(proc.gpu_memory_percent)
         table.add_row(
             gpu,
@@ -517,7 +529,7 @@ def render_process_table(
             metric_text(proc.cpu_percent, digits=1),
             metric_text(proc.host_mem_percent, digits=1),
             proc.elapsed or "-",
-            command,
+            command_cell,
             style=(
                 f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}"
                 if selected_visible_index == visible_index
@@ -624,6 +636,7 @@ def visible_process_window(
     process_state: ProcessViewState,
     max_visual_rows: int | None,
     command_width: int,
+    tree_prefixes: dict[tuple[int, int | None], str] | None = None,
 ) -> list[ProcessRenderRow]:
     if not processes:
         process_state.scroll_offset = 0
@@ -637,7 +650,15 @@ def visible_process_window(
         def row_at(index: int) -> ProcessRenderRow:
             row = wrapped_rows.get(index)
             if row is None:
-                row = wrapped_process_row(processes[index], command_width, max_lines=max_visual_rows)
+                prefix = ""
+                if tree_prefixes:
+                    prefix = tree_prefixes.get(process_selection_key(processes[index]), "")
+                row = wrapped_process_row(
+                    processes[index],
+                    command_width,
+                    max_lines=max_visual_rows,
+                    tree_prefix=prefix,
+                )
                 wrapped_rows[index] = row
             return row
 
@@ -666,8 +687,13 @@ def process_command(proc: ProcessInfo) -> str:
     return proc.args or proc.command or proc.name or "N/A"
 
 
-def wrapped_process_row(proc: ProcessInfo, command_width: int, max_lines: int | None = None) -> ProcessRenderRow:
-    command = wrap_process_command(process_command(proc), command_width, max_lines)
+def wrapped_process_row(
+    proc: ProcessInfo,
+    command_width: int,
+    max_lines: int | None = None,
+    tree_prefix: str = "",
+) -> ProcessRenderRow:
+    command = wrap_prefixed_process_command(process_command(proc), command_width, max_lines, tree_prefix)
     return ProcessRenderRow(proc, command, max(1, command.count("\n") + 1))
 
 
@@ -682,6 +708,32 @@ def wrap_process_command(command: str, width: int, max_lines: int | None = None)
     if max_lines is not None:
         lines = truncate_command_lines(lines, width, max_lines)
     return "\n".join(lines)
+
+
+def wrap_prefixed_process_command(command: str, width: int, max_lines: int | None, prefix: str) -> str:
+    if not prefix:
+        return wrap_process_command(command, width, max_lines)
+    command_width = max(1, width - len(prefix))
+    lines = wrap_command_lines(command, command_width)
+    if max_lines is not None:
+        lines = truncate_command_lines(lines, command_width, max_lines)
+    continuation = tree_continuation_prefix(prefix)
+    return "\n".join(
+        f"{prefix}{line}" if index == 0 else f"{continuation}{line}"
+        for index, line in enumerate(lines)
+    )
+
+
+def tree_continuation_prefix(prefix: str) -> str:
+    parts = [prefix[index : index + 3] for index in range(0, len(prefix), 3)]
+    if not parts:
+        return ""
+    last = parts[-1]
+    if last == "├─ ":
+        parts[-1] = "│  "
+    elif last == "└─ ":
+        parts[-1] = "   "
+    return "".join(parts)
 
 
 def wrap_command_lines(command: str, width: int) -> list[str]:
@@ -713,6 +765,56 @@ def ellipsize_command_line(line: str, width: int) -> str:
     if width <= 3:
         return "." * width
     return f"{line[: width - 3].rstrip()}..."
+
+
+def process_tree_prefixes(processes: list[ProcessInfo]) -> dict[tuple[int, int | None], str]:
+    rows_by_key = {process_selection_key(proc): proc for proc in processes}
+    key_by_pid: dict[int, tuple[int, int | None]] = {}
+    for proc in processes:
+        key_by_pid.setdefault(proc.pid, process_selection_key(proc))
+
+    root_keys: list[tuple[int, int | None]] = []
+    children_by_parent: dict[tuple[int, int | None], list[tuple[int, int | None]]] = {}
+    for proc in processes:
+        key = process_selection_key(proc)
+        parent_key = key_by_pid.get(proc.ppid or -1)
+        if parent_key is None or parent_key == key:
+            root_keys.append(key)
+            continue
+        children_by_parent.setdefault(parent_key, []).append(key)
+
+    prefixes: dict[tuple[int, int | None], str] = {}
+    visited: set[tuple[int, int | None]] = set()
+
+    def assign(
+        key: tuple[int, int | None],
+        parent_last_flags: list[bool],
+        is_root: bool,
+        is_last: bool,
+    ) -> None:
+        if key in visited:
+            return
+        visited.add(key)
+        if is_root:
+            prefixes[key] = ""
+        else:
+            prefix_parts = ["   " if was_last else "│  " for was_last in parent_last_flags]
+            prefix_parts.append("└─ " if is_last else "├─ ")
+            prefixes[key] = "".join(prefix_parts)
+        children = children_by_parent.get(key, [])
+        for index, child_key in enumerate(children):
+            assign(
+                child_key,
+                parent_last_flags + ([is_last] if not is_root else []),
+                False,
+                index == len(children) - 1,
+            )
+
+    for index, key in enumerate(root_keys):
+        assign(key, [], True, index == len(root_keys) - 1)
+    for key in rows_by_key:
+        assign(key, [], True, True)
+    return prefixes
 
 
 def metric_text(value: float | int | None, digits: int = 1) -> Text:

@@ -449,6 +449,7 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("PgUp/PgDn: scroll", plain)
         self.assertNotIn("n/N: next/prev", plain)
         self.assertIn("s: sort", plain)
+        self.assertIn("t: tree", plain)
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
         self.assertIn("x: kill", plain)
@@ -560,6 +561,61 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Filter: train", title_line)
         self.assertIn("python train.py", plain)
         self.assertNotIn("python serve.py", plain)
+
+    def test_tree_mode_renders_connectors_and_selected_row(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=11, ppid=10, user="demo", args="python train.py"),
+            ProcessInfo(gpu_index=1, pid=12, ppid=10, user="demo", args="python serve.py"),
+        ]
+        ancestors = [ProcessInfo(gpu_index=None, pid=10, user="demo", args="bash launcher")]
+        state = ProcessViewState(selected_pid=12, tree_mode=True, viewport_rows=4)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                processes,
+                process_state=state,
+                max_rows=4,
+                terminal_width=140,
+                process_ancestors=ancestors,
+            )
+        )
+
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        self.assertIn("Process Tree  3/3", plain)
+        self.assertIn("├─ python train", plain)
+        self.assertIn("└─ python serve", plain)
+        selected_lines = [line for line in styled.splitlines() if "48;2;68;71;90" in line]
+        self.assertEqual(len(selected_lines), 1)
+        self.assertIn("└─ python serve", selected_lines[0])
+
+    def test_tree_mode_wraps_continuation_lines_under_prefix(self) -> None:
+        root = ProcessInfo(gpu_index=None, pid=1, args="init")
+        parent = ProcessInfo(gpu_index=None, pid=10, ppid=1, args="launcher")
+        child = ProcessInfo(
+            gpu_index=0,
+            pid=11,
+            ppid=10,
+            args=" ".join(f"--very-long-option-{index}=demo-value" for index in range(10)),
+        )
+        sibling = ProcessInfo(gpu_index=None, pid=20, ppid=1, args="next-service")
+        processes = [root, parent, child, sibling]
+        state = ProcessViewState(selected_pid=11, tree_mode=True, viewport_rows=3)
+        state.sync(processes, viewport_rows=3)
+
+        rows = render.visible_process_window(
+            processes,
+            state,
+            max_visual_rows=3,
+            command_width=24,
+            tree_prefixes=render.process_tree_prefixes(processes),
+        )
+
+        child_row = rows[-1]
+        lines = child_row.command.splitlines()
+        self.assertTrue(lines[0].startswith("│  └─ "))
+        self.assertTrue(lines[1].startswith("│     "))
+        self.assertLessEqual(child_row.visual_height, 3)
 
     def test_sort_menu_stays_above_process_table_when_cropped(self) -> None:
         long_args = (

@@ -266,13 +266,13 @@ def handle_key_batch(
     keys: list[str],
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
-    processes = process_state.display_processes(snapshot.processes)
+    processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
     process_state.sync(processes)
     processes_dirty = False
     with profile_span("key-handling"):
         for key in keys:
             if processes_dirty and key_needs_current_processes(process_state, key):
-                processes = process_state.display_processes(snapshot.processes)
+                processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
                 process_state.sync(processes)
                 processes_dirty = False
             view_before = process_view_key(process_state)
@@ -281,16 +281,17 @@ def handle_key_batch(
             if process_view_key(process_state) != view_before:
                 processes_dirty = True
         if processes_dirty:
-            processes = process_state.display_processes(snapshot.processes)
+            processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
             process_state.sync(processes)
     return quit_requested, processes
 
 
-def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str]:
+def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, bool]:
     return (
         process_state.sort_field,
         process_state.sort_desc,
         process_state.filter_query.strip(),
+        process_state.tree_mode,
     )
 
 

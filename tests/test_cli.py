@@ -464,6 +464,32 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.filter_input, "")
         self.assertEqual([row.pid for row in processes], [1, 2])
 
+    def test_handle_key_batch_recomputes_processes_after_tree_toggle(self) -> None:
+        state = cli.ProcessViewState(selected_pid=42)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=42, ppid=7, args="python train.py"),
+            ],
+            process_ancestors=[
+                ProcessInfo(gpu_index=None, pid=7, args="bash launcher"),
+            ],
+        )
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["t", "k"])
+
+        self.assertFalse(quit_requested)
+        self.assertTrue(state.tree_mode)
+        self.assertEqual([row.pid for row in processes], [7, 42])
+        self.assertEqual(state.selected_pid, 7)
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["t"])
+
+        self.assertFalse(quit_requested)
+        self.assertFalse(state.tree_mode)
+        self.assertEqual([row.pid for row in processes], [42])
+        self.assertEqual(state.selected_pid, 42)
+
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()
         release_collect = threading.Event()

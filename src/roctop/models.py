@@ -42,6 +42,7 @@ class ProcessInfo:
     args: str = ""
     gpu_memory_bytes: int = 0
     gpu_memory_percent: float = 0.0
+    ppid: int | None = None
 
 
 @dataclass(slots=True)
@@ -52,6 +53,7 @@ class Snapshot:
     gpus: list[GpuInfo] = field(default_factory=list)
     processes: list[ProcessInfo] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    process_ancestors: list[ProcessInfo] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

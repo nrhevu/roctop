@@ -145,6 +145,53 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.selected_pid, 3)
         self.assertEqual(state.selected_index, 1)
 
+    def test_tree_mode_toggles_with_t(self) -> None:
+        processes = [proc(100)]
+        state = ProcessViewState(viewport_rows=3)
+
+        result = state.handle_key("t", processes)
+        self.assertTrue(result.changed)
+        self.assertTrue(state.tree_mode)
+
+        state.handle_key("t", processes)
+        self.assertFalse(state.tree_mode)
+
+    def test_tree_mode_keeps_parent_first_and_sorts_siblings(self) -> None:
+        processes = [
+            proc(12, ppid=10, cpu_percent=1.0, args="child-low"),
+            proc(11, ppid=10, cpu_percent=90.0, args="child-high"),
+        ]
+        ancestors = [ProcessInfo(gpu_index=None, pid=10, args="parent")]
+        state = ProcessViewState(tree_mode=True, sort_field="cpu", sort_desc=True, viewport_rows=4)
+
+        display = state.display_processes(processes, ancestors)
+
+        self.assertEqual([row.pid for row in display], [10, 11, 12])
+
+    def test_tree_mode_default_sort_uses_pid_order(self) -> None:
+        processes = [
+            proc(12, ppid=10, args="child-high-pid"),
+            proc(11, ppid=10, args="child-low-pid"),
+        ]
+        ancestors = [ProcessInfo(gpu_index=None, pid=10, args="parent")]
+        state = ProcessViewState(tree_mode=True, viewport_rows=4)
+
+        display = state.display_processes(processes, ancestors)
+
+        self.assertEqual([row.pid for row in display], [10, 11, 12])
+
+    def test_tree_filter_keeps_only_matching_rows_as_roots(self) -> None:
+        processes = [
+            proc(11, ppid=10, args="demo::train"),
+            proc(12, ppid=10, args="demo::serve"),
+        ]
+        ancestors = [ProcessInfo(gpu_index=None, pid=10, args="launcher")]
+        state = ProcessViewState(tree_mode=True, filter_query="train", viewport_rows=4)
+
+        display = state.display_processes(processes, ancestors)
+
+        self.assertEqual([row.pid for row in display], [11])
+
     def test_search_mode_commits_query_and_matches_command_pid_or_user(self) -> None:
         processes = [
             proc(100, user="alice", args="demo::trainer --batch-size 64"),
