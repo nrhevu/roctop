@@ -597,7 +597,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("ACTION", plain)
         self.assertIn("MODE", plain)
         self.assertIn("Open help / close help", plain)
-        self.assertIn("Up/Down: scroll", plain)
+        self.assertIn("j/k or Up/Down: scroll", plain)
+        self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("?/Esc: close", plain)
         self.assertLess(plain.index("│ GPU"), plain.index("Help  1-"))
 
@@ -682,6 +683,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Exe", plain)
         self.assertIn("/usr/bin/python", plain)
         self.assertIn("--really-long-flag", plain)
+        self.assertIn("j/k or Up/Down: scroll", plain)
+        self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("i/Esc: close", plain)
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:

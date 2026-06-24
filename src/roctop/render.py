@@ -285,7 +285,7 @@ def render_help_popup(process_state: ProcessViewState, terminal_width: int | Non
     table.add_column("MODE", style=DRACULA_DIM, no_wrap=True)
     for key, action, mode in HELP_ENTRIES[start:end]:
         table.add_row(key, action, mode)
-    table.caption = "Up/Down: scroll   Left/Right: page   ?/Esc: close"
+    table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   ?/Esc: close"
     table.caption_style = DRACULA_DIM
 
     available_width = terminal_width or 88
@@ -314,7 +314,7 @@ def render_process_info_popup(
     table.add_column("VALUE", style=DRACULA_FG, ratio=1, overflow="fold")
     for label, value in rows[start:end]:
         table.add_row(label, value or "-")
-    table.caption = "Up/Down: scroll   Left/Right: page   i/Esc: close"
+    table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   i/Esc: close"
     table.caption_style = DRACULA_DIM
 
     proc = process_state.process_info_process

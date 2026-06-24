@@ -86,8 +86,8 @@ HELP_VISIBLE_ROWS = 22
 PROCESS_INFO_VISIBLE_ROWS = 24
 HELP_ENTRIES = (
     ("?", "Open help / close help", "normal, help"),
-    ("Up / Down", "Scroll help one row", "help"),
-    ("Left / Right", "Page help up/down", "help"),
+    ("k/j or Up/Down", "Scroll popup one row", "help, info"),
+    ("h/l or Left/Right", "Page popup up/down", "help, info"),
     ("j/k or Up/Down", "Move process cursor", "normal"),
     ("PgUp/PgDn", "Move process cursor by page", "normal"),
     ("s", "Open sort menu", "normal"),
@@ -349,19 +349,19 @@ class ProcessViewState:
             self.mode = MODE_NORMAL
             self.clear_status_message()
             return KeyResult(changed=True)
-        if key == KEY_UP:
+        if key in ("k", KEY_UP):
             self.process_info_scroll_offset = max(0, self.process_info_scroll_offset - 1)
             return KeyResult(changed=True)
-        if key == KEY_DOWN:
+        if key in ("j", KEY_DOWN):
             self.process_info_scroll_offset = min(
                 max_process_info_scroll_offset(self),
                 self.process_info_scroll_offset + 1,
             )
             return KeyResult(changed=True)
-        if key == KEY_LEFT:
+        if key in ("h", KEY_LEFT):
             self.process_info_scroll_offset = max(0, self.process_info_scroll_offset - PROCESS_INFO_VISIBLE_ROWS)
             return KeyResult(changed=True)
-        if key == KEY_RIGHT:
+        if key in ("l", KEY_RIGHT):
             self.process_info_scroll_offset = min(
                 max_process_info_scroll_offset(self),
                 self.process_info_scroll_offset + PROCESS_INFO_VISIBLE_ROWS,
@@ -420,16 +420,16 @@ class ProcessViewState:
             self.mode = MODE_NORMAL
             self.clear_status_message()
             return KeyResult(changed=True)
-        if key == KEY_UP:
+        if key in ("k", KEY_UP):
             self.help_scroll_offset = max(0, self.help_scroll_offset - 1)
             return KeyResult(changed=True)
-        if key == KEY_DOWN:
+        if key in ("j", KEY_DOWN):
             self.help_scroll_offset = min(max_help_scroll_offset(), self.help_scroll_offset + 1)
             return KeyResult(changed=True)
-        if key == KEY_LEFT:
+        if key in ("h", KEY_LEFT):
             self.help_scroll_offset = max(0, self.help_scroll_offset - HELP_VISIBLE_ROWS)
             return KeyResult(changed=True)
-        if key == KEY_RIGHT:
+        if key in ("l", KEY_RIGHT):
             self.help_scroll_offset = min(max_help_scroll_offset(), self.help_scroll_offset + HELP_VISIBLE_ROWS)
             return KeyResult(changed=True)
         return KeyResult()

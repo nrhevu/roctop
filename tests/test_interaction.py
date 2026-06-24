@@ -327,16 +327,22 @@ class InteractionTests(unittest.TestCase):
         processes = [proc(100)]
         state = ProcessViewState(mode=MODE_HELP, viewport_rows=4)
 
+        state.handle_key("j", processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, min(1, max_help_scroll_offset()))
+
+        state.handle_key("k", processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 0)
+
+        state.handle_key("l", processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, max_help_scroll_offset())
+
+        state.handle_key("h", processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 0)
+
         state.handle_key(KEY_DOWN, processes, processes_synced=True)
         self.assertEqual(state.help_scroll_offset, min(1, max_help_scroll_offset()))
 
         state.handle_key(KEY_UP, processes, processes_synced=True)
-        self.assertEqual(state.help_scroll_offset, 0)
-
-        state.handle_key(KEY_RIGHT, processes, processes_synced=True)
-        self.assertEqual(state.help_scroll_offset, max_help_scroll_offset())
-
-        state.handle_key(KEY_LEFT, processes, processes_synced=True)
         self.assertEqual(state.help_scroll_offset, 0)
 
     def test_help_mode_ignores_non_help_controls(self) -> None:
@@ -344,7 +350,7 @@ class InteractionTests(unittest.TestCase):
         state = ProcessViewState(mode=MODE_HELP, selected_pid=100, viewport_rows=4)
         state.sync(processes)
 
-        result = state.handle_key("h", processes, processes_synced=True)
+        result = state.handle_key("x", processes, processes_synced=True)
 
         self.assertFalse(result.changed)
         self.assertEqual(state.mode, MODE_HELP)
@@ -381,16 +387,22 @@ class InteractionTests(unittest.TestCase):
         state.sync(processes)
         state.open_process_info(processes[0], ProcessDetailInfo(pid=100))
 
+        state.handle_key("j", processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, min(1, max_process_info_scroll_offset(state)))
+
+        state.handle_key("k", processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, 0)
+
+        state.handle_key("l", processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, max_process_info_scroll_offset(state))
+
+        state.handle_key("h", processes, processes_synced=True)
+        self.assertEqual(state.process_info_scroll_offset, 0)
+
         state.handle_key(KEY_DOWN, processes, processes_synced=True)
         self.assertEqual(state.process_info_scroll_offset, min(1, max_process_info_scroll_offset(state)))
 
         state.handle_key(KEY_UP, processes, processes_synced=True)
-        self.assertEqual(state.process_info_scroll_offset, 0)
-
-        state.handle_key(KEY_RIGHT, processes, processes_synced=True)
-        self.assertEqual(state.process_info_scroll_offset, max_process_info_scroll_offset(state))
-
-        state.handle_key(KEY_LEFT, processes, processes_synced=True)
         self.assertEqual(state.process_info_scroll_offset, 0)
 
     def test_process_info_mode_ignores_normal_controls(self) -> None:
@@ -399,7 +411,7 @@ class InteractionTests(unittest.TestCase):
         state.sync(processes)
         state.open_process_info(processes[0], ProcessDetailInfo(pid=100))
 
-        result = state.handle_key("j", processes, processes_synced=True)
+        result = state.handle_key("s", processes, processes_synced=True)
 
         self.assertFalse(result.changed)
         self.assertEqual(state.mode, MODE_PROCESS_INFO)
