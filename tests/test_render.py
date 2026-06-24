@@ -459,7 +459,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("i: info", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
-        self.assertLess(plain.index("x: kill"), plain.index("i: info"))
+        self.assertLess(plain.index("i: info"), plain.index("x: kill"))
         self.assertLess(plain.index("i: info"), plain.index("?: help"))
         self.assertLess(plain.index("x: kill"), plain.index("?: help"))
         self.assertLess(plain.index("?: help"), plain.index("q: quit"))

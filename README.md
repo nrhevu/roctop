@@ -59,8 +59,8 @@ p                 jump to parent process in tree view
 h/Left, l/Right   jump to previous/next sibling in tree view
 /                 search processes
 n/N               next/previous search match
-x                 kill selected process with confirmation
 i                 show selected process details
+x                 kill selected process with confirmation
 ?                 open/close help
 q or Ctrl-C       quit
 ```

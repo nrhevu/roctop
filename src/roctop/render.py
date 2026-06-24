@@ -261,8 +261,8 @@ def append_process_help(details: Text) -> None:
     append_keybinding(details, "t", "tree")
     append_keybinding(details, "/", "search")
     append_keybinding(details, "f", "filter")
-    append_keybinding(details, "x", "kill")
     append_keybinding(details, "i", "info")
+    append_keybinding(details, "x", "kill")
     append_keybinding(details, "?", "help")
     append_keybinding(details, "q", "quit")
 
