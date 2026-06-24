@@ -53,6 +53,8 @@ DRACULA_SELECTION_FG = DRACULA_FG
 SORT_MENU_SELECTION_BG = DRACULA_CYAN
 SORT_MENU_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
+# Braille cells have two horizontal dot columns. Packing two one-second
+# buckets per terminal cell keeps the dotted graph visually continuous.
 GRAPH_COLUMNS_PER_CELL = 2
 BRAILLE_DOTS_BY_COLUMN = (
     (0x01, 0x02, 0x04, 0x40),
@@ -642,13 +644,14 @@ def metric_values_by_time(
     if not samples:
         return values
     graph_end_time = end_time or samples[-1].timestamp
+    graph_end_second = graph_end_time.replace(microsecond=0)
     totals = [0.0] * seconds
     counts = [0] * seconds
     for sample in samples:
-        elapsed_seconds = (graph_end_time - sample.timestamp).total_seconds()
-        if elapsed_seconds < -0.5:
+        sample_second = sample.timestamp.replace(microsecond=0)
+        offset = int((graph_end_second - sample_second).total_seconds())
+        if offset < 0:
             continue
-        offset = max(0, int(elapsed_seconds))
         if offset >= seconds:
             continue
         value = getattr(sample, metric_name)
@@ -691,7 +694,8 @@ def metric_graph_lines(
         line = Text(no_wrap=True, overflow="crop")
         for column_start in range(0, len(padded_values), GRAPH_COLUMNS_PER_CELL):
             active_mask = 0
-            for column, value in enumerate(padded_values[column_start : column_start + GRAPH_COLUMNS_PER_CELL]):
+            cell_values = padded_values[column_start : column_start + GRAPH_COLUMNS_PER_CELL]
+            for column, value in enumerate(cell_values):
                 filled_rows = graph_filled_rows(value, height)
                 active_mask |= braille_graph_mask(
                     filled_rows=filled_rows,

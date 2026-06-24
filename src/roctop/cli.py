@@ -5,7 +5,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 
 from rich.console import Console
@@ -40,6 +40,12 @@ from .render import render_snapshot
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
 GRAPH_FRAME_SECONDS = 1.0
+GRAPH_METRIC_FIELDS = (
+    "avg_cpu_percent",
+    "avg_mem_percent",
+    "avg_gpu_percent",
+    "avg_gpu_mem_percent",
+)
 
 
 @dataclass(slots=True)
@@ -246,8 +252,8 @@ def poll_live_until_quit(
         if refresh_due:
             display_time = datetime.now()
         if graph_due:
-            graph_frame = capture_graph_frame(history, display_time)
-        if current_size != rendered_size or status_expired or refresh_due:
+            graph_frame = advance_graph_frame(history, graph_frame, datetime.now())
+        if current_size != rendered_size or status_expired or refresh_due or graph_due:
             live.update(
                 render_live_snapshot(
                     snapshot,
@@ -266,7 +272,8 @@ def poll_live_until_quit(
             if graph_due:
                 next_graph_at = now + graph_interval
 
-        timeout = min(KEY_POLL_SECONDS, max(0.0, next_render_at - time.monotonic()))
+        next_wakeup_at = min(next_render_at, next_graph_at)
+        timeout = min(KEY_POLL_SECONDS, max(0.0, next_wakeup_at - time.monotonic()))
         keys = keyboard.read_keys(timeout=timeout)
         if not keys:
             continue
@@ -456,8 +463,126 @@ def render_live_snapshot(
     )
 
 
-def capture_graph_frame(history: MetricsHistory, display_time: datetime | None = None) -> GraphFrame:
-    return GraphFrame(display_time=display_time or datetime.now(), history_samples=history.samples)
+def capture_graph_frame(
+    history: MetricsHistory,
+    display_time: datetime | None = None,
+) -> GraphFrame:
+    frame_time = display_time or datetime.now()
+    samples = history.samples
+    display_second = latest_graph_sample_second(samples)
+    if display_second is None:
+        display_second = graph_frame_time(frame_time)
+    return GraphFrame(
+        display_time=display_second,
+        history_samples=graph_samples_until(samples, display_second, history.max_samples),
+    )
+
+
+def advance_graph_frame(
+    history: MetricsHistory,
+    previous_frame: GraphFrame,
+    now: datetime | None = None,
+) -> GraphFrame:
+    closed_second = graph_frame_time(now or datetime.now()) - timedelta(seconds=int(GRAPH_FRAME_SECONDS))
+    next_second = previous_frame.display_time + timedelta(seconds=int(GRAPH_FRAME_SECONDS))
+    if next_second > closed_second:
+        return previous_frame
+    raw_samples = history.samples
+    if not graph_bucket_can_close(raw_samples, next_second):
+        return previous_frame
+    previous_values = graph_sample_values(previous_frame.history_samples[-1]) if previous_frame.history_samples else None
+    sample = graph_sample_for_second(raw_samples, next_second, previous_values)
+    samples = (*previous_frame.history_samples, sample)
+    return GraphFrame(display_time=next_second, history_samples=samples[-history.max_samples :])
+
+
+def graph_samples_until(
+    samples: tuple[MetricSample, ...],
+    end_time: datetime,
+    max_samples: int,
+) -> tuple[MetricSample, ...]:
+    if not samples:
+        return ()
+    end_second = graph_frame_time(end_time)
+    first_second = min(graph_frame_time(sample.timestamp) for sample in samples)
+    start_second = max(first_second, end_second - timedelta(seconds=max(0, max_samples - 1)))
+    bucket_samples: list[MetricSample] = []
+    previous_values: tuple[float | None, ...] | None = None
+    bucket_time = start_second
+    while bucket_time <= end_second:
+        sample = graph_sample_for_second(samples, bucket_time, previous_values)
+        previous_values = graph_sample_values(sample)
+        bucket_samples.append(sample)
+        bucket_time += timedelta(seconds=1)
+    return tuple(bucket_samples)
+
+
+def graph_sample_for_second(
+    samples: tuple[MetricSample, ...],
+    bucket_time: datetime,
+    previous_values: tuple[float | None, ...] | None = None,
+) -> MetricSample:
+    totals = [0.0] * len(GRAPH_METRIC_FIELDS)
+    counts = [0] * len(GRAPH_METRIC_FIELDS)
+    for sample in samples:
+        if graph_frame_time(sample.timestamp) != bucket_time:
+            continue
+        for index, field in enumerate(GRAPH_METRIC_FIELDS):
+            value = getattr(sample, field)
+            if value is None:
+                continue
+            totals[index] += value
+            counts[index] += 1
+
+    if previous_values is None:
+        previous_values = latest_graph_values_at_or_before(samples, bucket_time)
+
+    values: list[float | None] = []
+    for index, count in enumerate(counts):
+        if count:
+            values.append(totals[index] / count)
+        else:
+            values.append(previous_values[index] if previous_values is not None else None)
+
+    return MetricSample(
+        timestamp=bucket_time,
+        avg_cpu_percent=values[0],
+        avg_mem_percent=values[1],
+        avg_gpu_percent=values[2],
+        avg_gpu_mem_percent=values[3],
+    )
+
+
+def latest_graph_values_at_or_before(
+    samples: tuple[MetricSample, ...],
+    bucket_time: datetime,
+) -> tuple[float | None, ...] | None:
+    values: list[float | None] = [None] * len(GRAPH_METRIC_FIELDS)
+    found = False
+    for sample in samples:
+        if graph_frame_time(sample.timestamp) > bucket_time:
+            continue
+        for index, field in enumerate(GRAPH_METRIC_FIELDS):
+            value = getattr(sample, field)
+            if value is None:
+                continue
+            values[index] = value
+            found = True
+    return tuple(values) if found else None
+
+
+def graph_sample_values(sample: MetricSample) -> tuple[float | None, ...]:
+    return tuple(getattr(sample, field) for field in GRAPH_METRIC_FIELDS)
+
+
+def latest_graph_sample_second(samples: tuple[MetricSample, ...]) -> datetime | None:
+    if not samples:
+        return None
+    return max(graph_frame_time(sample.timestamp) for sample in samples)
+
+
+def graph_bucket_can_close(samples: tuple[MetricSample, ...], bucket_time: datetime) -> bool:
+    return any(graph_frame_time(sample.timestamp) >= bucket_time for sample in samples)
 
 
 def live_render_interval(interval: float) -> float:
@@ -465,7 +590,11 @@ def live_render_interval(interval: float) -> float:
 
 
 def graph_frame_interval(interval: float) -> float:
-    return max(GRAPH_FRAME_SECONDS, live_render_interval(interval))
+    return GRAPH_FRAME_SECONDS
+
+
+def graph_frame_time(display_time: datetime) -> datetime:
+    return display_time.replace(microsecond=0)
 
 
 def console_dimensions(console: Console) -> tuple[int, int]:

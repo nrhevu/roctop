@@ -280,6 +280,41 @@ class RenderTests(unittest.TestCase):
 
         self.assertEqual(values[-1], 20.0)
 
+    def test_metric_values_keep_last_bucket_when_frame_crosses_second(self) -> None:
+        samples = [
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0, 100000),
+                avg_cpu_percent=10.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            ),
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0, 900000),
+                avg_cpu_percent=30.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            ),
+        ]
+
+        current_second = render.metric_values_by_time(
+            samples,
+            "avg_cpu_percent",
+            seconds=3,
+            end_time=datetime(2026, 6, 22, 12, 0, 0, 950000),
+        )
+        next_second = render.metric_values_by_time(
+            samples,
+            "avg_cpu_percent",
+            seconds=3,
+            end_time=datetime(2026, 6, 22, 12, 0, 1, 100000),
+        )
+
+        self.assertEqual(current_second[-1], 20.0)
+        self.assertEqual(next_second[-2], 20.0)
+        self.assertEqual(next_second[-1], 20.0)
+
     def test_time_axis_uses_one_second_offsets(self) -> None:
         axis = render.time_axis_line(130).plain
         self.assertEqual(axis.index("120s"), 65)

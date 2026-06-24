@@ -326,10 +326,207 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cli.live_render_interval(0.01), cli.KEY_POLL_SECONDS)
         self.assertEqual(cli.live_render_interval(0.25), 0.25)
 
-    def test_graph_frame_interval_has_one_second_floor(self) -> None:
+    def test_graph_frame_interval_is_always_one_second(self) -> None:
         self.assertEqual(cli.graph_frame_interval(0.01), 1.0)
         self.assertEqual(cli.graph_frame_interval(0.25), 1.0)
-        self.assertEqual(cli.graph_frame_interval(2.0), 2.0)
+        self.assertEqual(cli.graph_frame_interval(1.0), 1.0)
+        self.assertEqual(cli.graph_frame_interval(2.0), 1.0)
+        self.assertEqual(cli.graph_frame_interval(3.0), 1.0)
+
+    def test_graph_frame_time_uses_whole_second(self) -> None:
+        self.assertEqual(
+            cli.graph_frame_time(datetime(2026, 6, 22, 12, 0, 1, 500000)),
+            datetime(2026, 6, 22, 12, 0, 1),
+        )
+
+    def test_advance_graph_frame_moves_one_second_at_a_time(self) -> None:
+        history = cli.MetricsHistory(max_samples=120)
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=10.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            )
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 1),
+                avg_cpu_percent=20.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            )
+        )
+        previous = cli.GraphFrame(
+            display_time=datetime(2026, 6, 22, 12, 0, 0),
+            history_samples=(),
+        )
+
+        advanced = cli.advance_graph_frame(
+            history,
+            previous,
+            now=datetime(2026, 6, 22, 12, 0, 5, 900000),
+        )
+        not_backwards = cli.advance_graph_frame(
+            history,
+            advanced,
+            now=datetime(2026, 6, 22, 12, 0, 0, 900000),
+        )
+
+        self.assertEqual(advanced.display_time, datetime(2026, 6, 22, 12, 0, 1))
+        self.assertEqual(len(advanced.history_samples), 1)
+        self.assertEqual(not_backwards.display_time, advanced.display_time)
+
+    def test_advance_graph_frame_waits_until_bucket_has_data(self) -> None:
+        history = cli.MetricsHistory(max_samples=120)
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=10.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            )
+        )
+        previous = cli.capture_graph_frame(history, datetime(2026, 6, 22, 12, 0, 0, 500000))
+
+        waiting = cli.advance_graph_frame(
+            history,
+            previous,
+            now=datetime(2026, 6, 22, 12, 0, 2, 100000),
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 1, 100000),
+                avg_cpu_percent=30.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            )
+        )
+        advanced = cli.advance_graph_frame(
+            history,
+            waiting,
+            now=datetime(2026, 6, 22, 12, 0, 2, 100000),
+        )
+
+        self.assertEqual(waiting.display_time, previous.display_time)
+        self.assertEqual(advanced.display_time, datetime(2026, 6, 22, 12, 0, 1))
+
+    def test_advance_graph_frame_does_not_recompute_rendered_buckets(self) -> None:
+        history = cli.MetricsHistory(max_samples=120)
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=10.0,
+                avg_mem_percent=20.0,
+                avg_gpu_percent=30.0,
+                avg_gpu_mem_percent=40.0,
+            )
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 1, 100000),
+                avg_cpu_percent=90.0,
+                avg_mem_percent=80.0,
+                avg_gpu_percent=70.0,
+                avg_gpu_mem_percent=60.0,
+            )
+        )
+        previous = cli.capture_graph_frame(history, datetime(2026, 6, 22, 12, 0, 1, 200000))
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 1, 800000),
+                avg_cpu_percent=0.0,
+                avg_mem_percent=0.0,
+                avg_gpu_percent=0.0,
+                avg_gpu_mem_percent=0.0,
+            )
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 2, 100000),
+                avg_cpu_percent=50.0,
+                avg_mem_percent=40.0,
+                avg_gpu_percent=30.0,
+                avg_gpu_mem_percent=20.0,
+            )
+        )
+
+        advanced = cli.advance_graph_frame(
+            history,
+            previous,
+            now=datetime(2026, 6, 22, 12, 0, 3, 100000),
+        )
+        buckets = {sample.timestamp: sample for sample in advanced.history_samples}
+
+        self.assertEqual(buckets[datetime(2026, 6, 22, 12, 0, 1)].avg_cpu_percent, 90.0)
+        self.assertEqual(buckets[datetime(2026, 6, 22, 12, 0, 2)].avg_cpu_percent, 50.0)
+
+    def test_live_loop_redraws_graph_once_per_second_when_table_interval_is_slower(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=100)
+
+        class FakeCollector:
+            def raise_if_failed(self) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        class FakeClock:
+            def __init__(self) -> None:
+                self.current = 0.0
+
+            def monotonic(self) -> float:
+                return self.current
+
+            def advance(self, seconds: float) -> None:
+                self.current += seconds
+
+        class FakeLive:
+            def __init__(self, clock: FakeClock) -> None:
+                self.clock = clock
+                self.update_times: list[float] = []
+
+            def update(self, renderable, refresh: bool = False) -> None:
+                self.update_times.append(self.clock.current)
+
+        class FakeKeyboard:
+            def __init__(self, clock: FakeClock, live: FakeLive) -> None:
+                self.clock = clock
+                self.live = live
+
+            def read_keys(self, timeout: float):
+                self.clock.advance(timeout)
+                if len(self.live.update_times) >= 3:
+                    return ["q"]
+                return []
+
+        clock = FakeClock()
+        live = FakeLive(clock)
+        original_monotonic = cli.time.monotonic
+
+        try:
+            cli.time.monotonic = clock.monotonic
+            cli.poll_live_until_quit(
+                live,
+                FakeKeyboard(clock, live),
+                Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)),
+                cli.MetricsHistory(max_samples=120),
+                cli.ProcessViewState(),
+                FakeConsole(),
+                FakeCollector(),
+                interval=2.0,
+            )
+        finally:
+            cli.time.monotonic = original_monotonic
+
+        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [1.0, 2.0, 3.0])
 
     def test_live_render_snapshot_uses_cached_graph_frame(self) -> None:
         class FakeConsole:
