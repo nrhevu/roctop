@@ -5,14 +5,16 @@ import unittest
 from io import StringIO
 from datetime import datetime
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.text import Text
 
 import roctop.render as render
 from roctop.history import MetricSample, MetricsHistory
-from roctop.interaction import MODE_FILTER, MODE_KILL_CONFIRM, MODE_SEARCH, ProcessViewState
+from roctop.interaction import MODE_FILTER, MODE_HELP, MODE_KILL_CONFIRM, MODE_SEARCH, ProcessViewState
 from roctop.models import GpuInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
+    estimate_process_view_rows,
     metric_graph_lines,
     percent_style,
     render_metrics_graphs,
@@ -448,15 +450,54 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("j/k: move", plain)
         self.assertNotIn("PgUp/PgDn: scroll", plain)
         self.assertNotIn("n/N: next/prev", plain)
+        self.assertIn("?: help", plain)
         self.assertIn("s: sort", plain)
         self.assertIn("t: tree", plain)
-        self.assertIn("p: parent", plain)
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
         self.assertIn("38;2;255;184;108", styled)
+
+    def test_help_popup_overlays_process_table_without_reserving_rows(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=123, args="python train.py"),
+            ],
+        )
+        normal_state = ProcessViewState(selected_pid=123, viewport_rows=4)
+        state = ProcessViewState(selected_pid=123, mode=MODE_HELP, viewport_rows=4)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=45, terminal_width=140))
+        plain = console.export_text(clear=False)
+
+        self.assertEqual(
+            estimate_process_view_rows(snapshot, None, 45, normal_state),
+            estimate_process_view_rows(snapshot, None, 45, state),
+        )
+        self.assertIn("Help  1-", plain)
+        self.assertIn("KEY", plain)
+        self.assertIn("ACTION", plain)
+        self.assertIn("MODE", plain)
+        self.assertIn("Open help / close help", plain)
+        self.assertIn("Up/Down: scroll", plain)
+        self.assertIn("?/Esc: close", plain)
+        self.assertLess(plain.index("│ GPU"), plain.index("Help  1-"))
+
+    def test_help_overlay_only_replaces_popup_rectangle(self) -> None:
+        base_line = "L" + "." * 118 + "R"
+        base = Group(*(Text(base_line) for _ in range(25)))
+        state = ProcessViewState(mode=MODE_HELP)
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render.HelpOverlay(base, state, terminal_height=25, terminal_width=120))
+        lines = console.export_text(clear=False).splitlines()
+
+        help_row = next(line for line in lines if "Open help / close help" in line)
+        self.assertTrue(help_row.startswith("L"))
+        self.assertTrue(help_row.rstrip().endswith("R"))
+        self.assertIn("normal, help", help_row)
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
         processes = [

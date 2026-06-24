@@ -13,6 +13,7 @@ from roctop.interaction import (
     KEY_RIGHT,
     KEY_UP,
     MODE_FILTER,
+    MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_NORMAL,
     MODE_SEARCH,
@@ -20,6 +21,7 @@ from roctop.interaction import (
     ProcessViewState,
     STATUS_MESSAGE_SECONDS,
     elapsed_seconds,
+    max_help_scroll_offset,
     parse_keys,
 )
 from roctop.models import ProcessInfo
@@ -230,7 +232,7 @@ class InteractionTests(unittest.TestCase):
         self.assertFalse(result.changed)
         self.assertEqual(state.selected_pid, 11)
 
-    def test_tree_mode_h_l_jump_between_visible_siblings(self) -> None:
+    def test_tree_mode_l_and_left_jump_between_visible_siblings(self) -> None:
         processes = [
             ProcessInfo(gpu_index=None, pid=10, args="parent"),
             proc(11, ppid=10, args="child-a"),
@@ -245,8 +247,29 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.selected_pid, 12)
         self.assertEqual(state.status_message, "")
 
-        state.handle_key("h", processes, processes_synced=True)
+        state.handle_key(KEY_LEFT, processes, processes_synced=True)
 
+        self.assertEqual(state.selected_pid, 11)
+
+    def test_tree_mode_h_jumps_to_previous_sibling_and_question_opens_help(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=10, args="parent"),
+            proc(11, ppid=10, args="child-a"),
+            proc(12, ppid=10, args="child-b"),
+        ]
+        state = ProcessViewState(selected_pid=12, tree_mode=True, viewport_rows=4)
+        state.sync(processes)
+
+        result = state.handle_key("h", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.selected_pid, 11)
+
+        result = state.handle_key("?", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_HELP)
         self.assertEqual(state.selected_pid, 11)
 
     def test_tree_mode_left_right_jump_between_visible_siblings(self) -> None:
@@ -276,6 +299,54 @@ class InteractionTests(unittest.TestCase):
 
         self.assertEqual(state.selected_pid, 11)
         self.assertEqual(state.status_message, "No visible sibling process")
+
+    def test_help_mode_opens_and_closes_with_question_or_escape(self) -> None:
+        processes = [proc(100)]
+        state = ProcessViewState(viewport_rows=4)
+
+        result = state.handle_key("?", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_HELP)
+        self.assertEqual(state.help_scroll_offset, 0)
+
+        result = state.handle_key("?", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+
+        state.handle_key("?", processes)
+        result = state.handle_key("esc", processes, processes_synced=True)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+
+    def test_help_mode_scrolls_and_pages_with_arrows(self) -> None:
+        processes = [proc(100)]
+        state = ProcessViewState(mode=MODE_HELP, viewport_rows=4)
+
+        state.handle_key(KEY_DOWN, processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, min(1, max_help_scroll_offset()))
+
+        state.handle_key(KEY_UP, processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 0)
+
+        state.handle_key(KEY_RIGHT, processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, max_help_scroll_offset())
+
+        state.handle_key(KEY_LEFT, processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 0)
+
+    def test_help_mode_ignores_non_help_controls(self) -> None:
+        processes = [proc(100), proc(101)]
+        state = ProcessViewState(mode=MODE_HELP, selected_pid=100, viewport_rows=4)
+        state.sync(processes)
+
+        result = state.handle_key("h", processes, processes_synced=True)
+
+        self.assertFalse(result.changed)
+        self.assertEqual(state.mode, MODE_HELP)
+        self.assertEqual(state.selected_pid, 100)
 
     def test_search_mode_commits_query_and_matches_command_pid_or_user(self) -> None:
         processes = [

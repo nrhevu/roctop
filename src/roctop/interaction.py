@@ -29,6 +29,7 @@ MODE_SORT_MENU = "sort_menu"
 MODE_KILL_CONFIRM = "kill_confirm"
 MODE_SEARCH = "search"
 MODE_FILTER = "filter"
+MODE_HELP = "help"
 
 KILL_CONFIRM_CANCEL = "cancel"
 KILL_CONFIRM_SIGTERM = "sigterm"
@@ -80,6 +81,29 @@ DEFAULT_DESCENDING_SORTS = {
     "time",
 }
 STATUS_MESSAGE_SECONDS = 3.0
+HELP_VISIBLE_ROWS = 22
+HELP_ENTRIES = (
+    ("?", "Open help / close help", "normal, help"),
+    ("Up / Down", "Scroll help one row", "help"),
+    ("Left / Right", "Page help up/down", "help"),
+    ("j/k or Up/Down", "Move process cursor", "normal"),
+    ("PgUp/PgDn", "Move process cursor by page", "normal"),
+    ("s", "Open sort menu", "normal"),
+    ("h/l or arrows", "Move sort/kill menu selection", "sort, kill"),
+    ("Enter", "Apply selected sort or kill option", "sort, kill"),
+    ("/", "Search processes", "normal"),
+    ("n/N", "Next/previous search match", "normal"),
+    ("f", "Filter processes", "normal"),
+    ("Esc", "Clear filter or cancel active mode", "normal, menus"),
+    ("t", "Toggle process tree", "normal"),
+    ("p", "Jump to parent process", "tree"),
+    ("h / Left", "Jump to previous sibling", "tree"),
+    ("l / Right", "Jump to next sibling", "tree"),
+    ("x", "Open kill confirmation", "normal"),
+    ("y", "Send SIGTERM in kill confirmation", "kill"),
+    ("q", "Quit or cancel menu", "normal, menus"),
+    ("Ctrl-C", "Quit", "all"),
+)
 ProcessSelectionKey = tuple[int, int | None]
 
 
@@ -104,6 +128,7 @@ class ProcessViewState:
     status_message_expires_at: float | None = None
     viewport_rows: int = 8
     tree_mode: bool = False
+    help_scroll_offset: int = 0
     search_query: str = ""
     search_input: str = ""
     filter_query: str = ""
@@ -214,6 +239,9 @@ class ProcessViewState:
                 self.sync(self.display_processes(source_processes))
             return result
 
+        if self.mode == MODE_HELP:
+            return self.handle_help_key(key)
+
         if key == KEY_ESC and self.filter_query.strip():
             self.clear_filter()
             if not processes_synced:
@@ -228,6 +256,11 @@ class ProcessViewState:
             return KeyResult(changed=True)
         if key == "p" and self.tree_mode:
             self.select_parent_process(processes)
+            return KeyResult(changed=True)
+        if key == "?":
+            self.mode = MODE_HELP
+            self.help_scroll_offset = 0
+            self.clear_status_message()
             return KeyResult(changed=True)
         if key in ("h", KEY_LEFT) and self.tree_mode:
             self.select_sibling_process(processes, direction=-1)
@@ -322,6 +355,25 @@ class ProcessViewState:
         if is_printable_key(key):
             self.filter_input += key
             self.apply_filter_input()
+            return KeyResult(changed=True)
+        return KeyResult()
+
+    def handle_help_key(self, key: str) -> KeyResult:
+        if key in (KEY_ESC, "?"):
+            self.mode = MODE_NORMAL
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key == KEY_UP:
+            self.help_scroll_offset = max(0, self.help_scroll_offset - 1)
+            return KeyResult(changed=True)
+        if key == KEY_DOWN:
+            self.help_scroll_offset = min(max_help_scroll_offset(), self.help_scroll_offset + 1)
+            return KeyResult(changed=True)
+        if key == KEY_LEFT:
+            self.help_scroll_offset = max(0, self.help_scroll_offset - HELP_VISIBLE_ROWS)
+            return KeyResult(changed=True)
+        if key == KEY_RIGHT:
+            self.help_scroll_offset = min(max_help_scroll_offset(), self.help_scroll_offset + HELP_VISIBLE_ROWS)
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -799,6 +851,10 @@ def current_sort_menu_index(sort_field: str) -> int:
         return SORT_OPTIONS.index(sort_field)
     except ValueError:
         return 0
+
+
+def max_help_scroll_offset() -> int:
+    return max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
 
 
 def kill_process(pid: int, kill_signal: signal.Signals = signal.SIGTERM) -> None:

@@ -53,10 +53,11 @@ roctop --json
 ```text
 j/k or Up/Down    move process cursor
 PgUp/PgDn         scroll processes
+?                 open/close help
 s                 open sort menu
 t                 toggle process tree
 p                 jump to parent process in tree view
-h/Left, l/Right jump to previous/next sibling in tree view
+h/Left, l/Right   jump to previous/next sibling in tree view
 /                 search processes
 n/N               next/previous search match
 x                 kill selected process with confirmation

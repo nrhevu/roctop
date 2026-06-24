@@ -10,15 +10,19 @@ from rich import box
 from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.measure import Measurement
 from rich.panel import Panel
+from rich.segment import Segment
 from rich.table import Table
 from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricsHistory
 from .interaction import (
+    HELP_ENTRIES,
+    HELP_VISIBLE_ROWS,
     KILL_CONFIRM_LABELS,
     KILL_CONFIRM_OPTIONS,
     MODE_FILTER,
+    MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_SEARCH,
     MODE_SORT_MENU,
@@ -80,6 +84,57 @@ class ProgressText:
         return Measurement(1, options.max_width)
 
 
+@dataclass(frozen=True, slots=True)
+class HelpOverlay:
+    base: object
+    process_state: ProcessViewState
+    terminal_height: int | None
+    terminal_width: int | None
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        options_width = max(1, options.max_width or console.size.width)
+        requested_width = max(1, self.terminal_width or options_width)
+        width = min(requested_width, options_width)
+        target_height = max(1, self.terminal_height or options.height or console.size.height)
+        render_options = options.update(width=width, max_width=width, height=None)
+
+        base_lines = [
+            Segment.adjust_line_length(line, width, pad=True)
+            for line in console.render_lines(self.base, render_options, pad=True)
+        ]
+        popup_lines = console.render_lines(render_help_popup(self.process_state, width), render_options, pad=False)
+        if not popup_lines:
+            yield from self._render_lines(base_lines)
+            return
+
+        popup_width = min(width, max(Segment.get_line_length(line) for line in popup_lines))
+        popup_lines = [Segment.adjust_line_length(line, popup_width, pad=True) for line in popup_lines]
+
+        canvas_height = max(len(base_lines), target_height)
+        blank_line = [Segment(" " * width)]
+        canvas = base_lines + [blank_line] * (canvas_height - len(base_lines))
+        top = max(0, (target_height - len(popup_lines)) // 2)
+        left = max(0, (width - popup_width) // 2)
+        right = min(width, left + popup_width)
+
+        if top + len(popup_lines) > len(canvas):
+            canvas.extend([blank_line] * (top + len(popup_lines) - len(canvas)))
+
+        for row_index, popup_line in enumerate(popup_lines):
+            base_line = Segment.adjust_line_length(canvas[top + row_index], width, pad=True)
+            before, _covered, after = list(Segment.divide(base_line, [left, right, width]))
+            canvas[top + row_index] = before + popup_line + after
+
+        yield from self._render_lines(canvas)
+
+    @staticmethod
+    def _render_lines(lines: list[list[Segment]]) -> RenderResult:
+        for index, line in enumerate(lines):
+            yield from line
+            if index < len(lines) - 1:
+                yield Segment.line()
+
+
 def render_snapshot(
     snapshot: Snapshot,
     history: MetricsHistory | None = None,
@@ -89,7 +144,7 @@ def render_snapshot(
     display_processes: list[ProcessInfo] | None = None,
     display_time: datetime | None = None,
     show_subsecond_time: bool = False,
-) -> Group:
+) -> Group | HelpOverlay:
     with profile_span("render"):
         gpu_table = render_gpu_table(snapshot.gpus)
         process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state)
@@ -115,7 +170,10 @@ def render_snapshot(
         visible_warnings = ui_warnings(snapshot.warnings)
         if visible_warnings:
             parts.append(render_warnings(visible_warnings))
-        return Group(*parts)
+        base = Group(*parts)
+        if process_state is not None and process_state.mode == MODE_HELP:
+            return HelpOverlay(base, process_state, terminal_height, terminal_width)
+        return base
 
 
 def estimate_process_view_rows(
@@ -181,9 +239,9 @@ def format_header_timestamp(timestamp: datetime, show_subsecond_time: bool = Fal
 
 
 def append_process_help(details: Text) -> None:
-    append_keybinding(details, "s", "sort", leading_space=False)
+    append_keybinding(details, "?", "help", leading_space=False)
+    append_keybinding(details, "s", "sort")
     append_keybinding(details, "t", "tree")
-    append_keybinding(details, "p", "parent")
     append_keybinding(details, "/", "search")
     append_keybinding(details, "f", "filter")
     append_keybinding(details, "x", "kill")
@@ -195,6 +253,31 @@ def append_keybinding(details: Text, key: str, action: str, leading_space: bool 
         details.append("   ")
     details.append(f"{key}: ", style=f"bold {DRACULA_ORANGE}")
     details.append(action, style=DRACULA_DIM)
+
+
+def render_help_popup(process_state: ProcessViewState, terminal_width: int | None = None) -> Panel:
+    max_offset = max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
+    start = min(max(0, process_state.help_scroll_offset), max_offset)
+    end = min(len(HELP_ENTRIES), start + HELP_VISIBLE_ROWS)
+
+    table = Table(box=box.SIMPLE, expand=True, show_lines=False, padding=(0, 1))
+    table.add_column("KEY", style=f"bold {DRACULA_ORANGE}", no_wrap=True)
+    table.add_column("ACTION", style=DRACULA_FG, ratio=1)
+    table.add_column("MODE", style=DRACULA_DIM, no_wrap=True)
+    for key, action, mode in HELP_ENTRIES[start:end]:
+        table.add_row(key, action, mode)
+    table.caption = "Up/Down: scroll   Left/Right: page   ?/Esc: close"
+    table.caption_style = DRACULA_DIM
+
+    available_width = terminal_width or 88
+    panel_width = min(128, max(1, available_width - 4))
+    return Panel(
+        table,
+        title=Text(f"Help  {start + 1}-{end}/{len(HELP_ENTRIES)}", style=f"bold {DRACULA_CYAN}"),
+        border_style=DRACULA_CYAN,
+        box=box.SQUARE,
+        width=panel_width,
+    )
 
 
 def render_gpu_table(gpus: list[GpuInfo]) -> Table:

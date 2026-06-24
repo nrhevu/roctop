@@ -11,7 +11,7 @@ from rich.console import Console
 
 from roctop import cli
 from roctop.collectors import CommandInterrupted, CommandTimeout
-from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP
+from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP, MODE_HELP, MODE_NORMAL
 from roctop.models import ProcessInfo, Snapshot
 
 
@@ -512,9 +512,36 @@ class CliTests(unittest.TestCase):
     def test_sibling_keys_need_current_process_display(self) -> None:
         state = cli.ProcessViewState(tree_mode=True)
 
+        self.assertFalse(cli.key_needs_current_processes(state, "?"))
         for key in ("h", "l", KEY_LEFT, KEY_RIGHT):
             with self.subTest(key=key):
                 self.assertTrue(cli.key_needs_current_processes(state, key))
+
+        state.tree_mode = False
+        self.assertFalse(cli.key_needs_current_processes(state, "h"))
+
+    def test_handle_key_batch_opens_and_closes_help_without_changing_selection(self) -> None:
+        state = cli.ProcessViewState(selected_pid=42)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=42, args="python train.py"),
+            ],
+        )
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["?"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.mode, MODE_HELP)
+        self.assertEqual([row.pid for row in processes], [42])
+        self.assertEqual(state.selected_pid, 42)
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["?"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual([row.pid for row in processes], [42])
+        self.assertEqual(state.selected_pid, 42)
 
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()

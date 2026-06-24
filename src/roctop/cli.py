@@ -23,6 +23,7 @@ from .interaction import (
     KEY_RIGHT,
     KEY_UP,
     MODE_FILTER,
+    MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_SEARCH,
     MODE_SORT_MENU,
@@ -300,14 +301,17 @@ def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, b
 def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bool:
     if process_state.mode == MODE_FILTER:
         return False
+    if process_state.mode == MODE_HELP:
+        return False
     if process_state.mode == MODE_SORT_MENU:
         return False
     if process_state.mode == MODE_SEARCH:
         return key == KEY_ENTER
     if process_state.mode == MODE_KILL_CONFIRM:
         return key in ("y", "Y", KEY_ENTER)
+    if key == "h":
+        return process_state.tree_mode
     return key in (
-        "h",
         "j",
         "k",
         "l",
