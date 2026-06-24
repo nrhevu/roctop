@@ -110,7 +110,10 @@ class CollectorTests(unittest.TestCase):
                 return CommandResult(
                     args=args,
                     returncode=0,
-                    stdout='{"system": {"PID42": "demo-worker, 0, 1048576, 0, 0"}}',
+                    stdout=(
+                        '{"card0": {"VRAM Total Memory (B)": "4194304"}, '
+                        '"system": {"PID42": "demo-worker, 0, 1048576, 0, 0"}}'
+                    ),
                     stderr="",
                 )
             if args[0] == "amd-smi":
@@ -122,6 +125,8 @@ class CollectorTests(unittest.TestCase):
 
         self.assertEqual([proc.pid for proc in snapshot.processes], [42])
         self.assertEqual(snapshot.processes[0].command, "demo-worker")
+        self.assertEqual(snapshot.processes[0].gpu_index, 0)
+        self.assertEqual(snapshot.processes[0].gpu_memory_percent, 25.0)
         amd_calls = [(args, timeout) for args, timeout in calls if args[0] == "amd-smi"]
         self.assertEqual(len(amd_calls), 1)
         self.assertEqual(amd_calls[0][1], collectors.AMD_SMI_PROCESS_TIMEOUT_SECONDS)
@@ -374,8 +379,35 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].memory_used_bytes, 200804560896)
         self.assertEqual(len(processes), 2)
         self.assertEqual(processes[0].pid, 710898)
+        self.assertEqual(processes[0].gpu_index, 1)
         self.assertEqual(processes[1].pid, 721888)
+        self.assertEqual(processes[1].gpu_index, 0)
         self.assertEqual(processes[1].gpu_memory_bytes, 0)
+
+    def test_parse_rocm_smi_json_sets_fallback_process_memory_percent(self) -> None:
+        gpus, processes, _driver = parse_rocm_smi_json(
+            {
+                "card0": {"VRAM Total Memory (B)": str(4 * 1024 * 1024)},
+                "system": {"PID42": "demo-worker, 0, 1048576, 0, 0"},
+            }
+        )
+
+        self.assertEqual(gpus[0].index, 0)
+        self.assertEqual(processes[0].gpu_index, 0)
+        self.assertEqual(processes[0].gpu_memory_percent, 25.0)
+
+    def test_parse_rocm_smi_json_treats_unsupported_optional_floats_as_missing(self) -> None:
+        gpus, _, _ = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "Temperature (Sensor junction) (C)": "not supported",
+                    "Current Socket Graphics Package Power (W)": "N/A",
+                }
+            }
+        )
+
+        self.assertIsNone(gpus[0].temperature_c)
+        self.assertIsNone(gpus[0].power_w)
 
     def test_parse_rocm_smi_json_normalizes_reported_model_name(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(
@@ -479,6 +511,28 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(processes[0].gpu_index, 4)
         self.assertEqual(processes[0].pid, 710898)
         self.assertGreater(processes[0].gpu_memory_percent, 60)
+
+    def test_parse_amd_smi_process_json_converts_memory_units_to_bytes(self) -> None:
+        gpus, _, _ = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "VRAM Total Memory (B)": str(2 * 1024 * 1024 * 1024),
+                }
+            }
+        )
+        raw = [
+            {
+                "gpu": 0,
+                "process_list": [
+                    {"process_info": {"pid": 42, "name": "worker", "mem_usage": {"value": 1, "unit": "GiB"}}},
+                ],
+            }
+        ]
+
+        processes = parse_amd_smi_process_json(raw, gpus)
+
+        self.assertEqual(processes[0].gpu_memory_bytes, 1024 * 1024 * 1024)
+        self.assertEqual(processes[0].gpu_memory_percent, 50.0)
 
     def test_parse_amd_smi_process_json_skips_non_object_entries(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(

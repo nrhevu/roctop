@@ -24,6 +24,15 @@ KEY_ESC = "esc"
 KEY_CTRL_C = "ctrl_c"
 KEY_BACKSPACE = "backspace"
 
+ESCAPE_KEY_SEQUENCES = (
+    ("\x1b[A", KEY_UP),
+    ("\x1b[B", KEY_DOWN),
+    ("\x1b[C", KEY_RIGHT),
+    ("\x1b[D", KEY_LEFT),
+    ("\x1b[5~", KEY_PAGE_UP),
+    ("\x1b[6~", KEY_PAGE_DOWN),
+)
+
 MODE_NORMAL = "normal"
 MODE_SORT_MENU = "sort_menu"
 MODE_KILL_CONFIRM = "kill_confirm"
@@ -127,6 +136,7 @@ class ProcessViewState:
     mode: str = MODE_NORMAL
     sort_menu_index: int = 0
     kill_confirm_index: int = 0
+    kill_confirm_pid: int | None = None
     status_message: str = ""
     status_message_expires_at: float | None = None
     viewport_rows: int = 8
@@ -322,13 +332,23 @@ class ProcessViewState:
         if key == "x":
             selected = self.selected_synced_process(processes)
             if selected is None:
+                self.kill_confirm_pid = None
                 self.set_status_message("No process selected")
             else:
-                self.mode = MODE_KILL_CONFIRM
-                self.kill_confirm_index = 0
-                self.clear_status_message()
+                self.open_kill_confirm(selected)
             return KeyResult(changed=True)
         return KeyResult()
+
+    def open_kill_confirm(self, process: ProcessInfo) -> None:
+        self.mode = MODE_KILL_CONFIRM
+        self.kill_confirm_index = 0
+        self.kill_confirm_pid = process.pid
+        self.clear_status_message()
+
+    def close_kill_confirm(self) -> None:
+        self.mode = MODE_NORMAL
+        self.kill_confirm_pid = None
+        self.clear_status_message()
 
     def open_process_info(
         self,
@@ -458,37 +478,39 @@ class ProcessViewState:
             self.kill_confirm_index = min(len(KILL_CONFIRM_OPTIONS) - 1, self.kill_confirm_index + 1)
             return KeyResult(changed=True)
         if key in (KEY_ESC, "q", "n", "N"):
-            self.mode = MODE_NORMAL
-            self.clear_status_message()
+            self.close_kill_confirm()
             return KeyResult(changed=True)
         if key in ("y", "Y"):
             self.kill_confirm_index = KILL_CONFIRM_OPTIONS.index(KILL_CONFIRM_SIGTERM)
         elif key == KEY_ENTER:
             option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
             if option == KILL_CONFIRM_CANCEL:
-                self.mode = MODE_NORMAL
-                self.clear_status_message()
+                self.close_kill_confirm()
                 return KeyResult(changed=True)
         else:
             return KeyResult()
 
         option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
         kill_signal = KILL_CONFIRM_SIGNALS[option]
-        selected = self.selected_synced_process(processes) if processes_synced else self.selected_process(processes)
+        target_pid = self.kill_confirm_pid
         self.mode = MODE_NORMAL
-        if selected is None:
+        self.kill_confirm_pid = None
+        if target_pid is None:
             self.set_status_message("No process selected")
             return KeyResult(changed=True)
+        if not any(proc.pid == target_pid for proc in processes):
+            self.set_status_message(f"PID {target_pid} is no longer running")
+            return KeyResult(changed=True)
         try:
-            kill_func(selected.pid, kill_signal)
+            kill_func(target_pid, kill_signal)
         except ProcessLookupError:
-            self.set_status_message(f"PID {selected.pid} is no longer running")
+            self.set_status_message(f"PID {target_pid} is no longer running")
         except PermissionError:
-            self.set_status_message(f"Permission denied killing PID {selected.pid}")
+            self.set_status_message(f"Permission denied killing PID {target_pid}")
         except OSError as exc:
-            self.set_status_message(f"Failed to kill PID {selected.pid}: {exc}")
+            self.set_status_message(f"Failed to kill PID {target_pid}: {exc}")
         else:
-            self.set_status_message(f"Sent {kill_signal.name} to PID {selected.pid}")
+            self.set_status_message(f"Sent {kill_signal.name} to PID {target_pid}")
         return KeyResult(changed=True)
 
     def handle_sort_menu_key(self, key: str) -> KeyResult:
@@ -653,6 +675,7 @@ class TerminalKeyboard:
         self.fd: int | None = None
         self.original_attrs = None
         self.enabled = False
+        self.pending_input = ""
 
     def __enter__(self) -> TerminalKeyboard:
         if hasattr(self.stream, "isatty") and self.stream.isatty():
@@ -671,12 +694,21 @@ class TerminalKeyboard:
             return []
         readable, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
         if not readable:
+            if self.pending_input:
+                keys, self.pending_input = parse_key_input(self.pending_input, flush_incomplete=True)
+                return keys
             return []
         data = os.read(self.fd, 64)
-        return parse_keys(data)
+        keys, self.pending_input = parse_key_input(self.pending_input + data.decode(errors="ignore"))
+        return keys
 
 
 def parse_keys(data: bytes | str) -> list[str]:
+    keys, _pending = parse_key_input(data, flush_incomplete=True)
+    return keys
+
+
+def parse_key_input(data: bytes | str, flush_incomplete: bool = False) -> tuple[list[str], str]:
     text = data.decode(errors="ignore") if isinstance(data, bytes) else data
     keys: list[str] = []
     index = 0
@@ -701,23 +733,19 @@ def parse_keys(data: bytes | str) -> list[str]:
 
         sequence = text[index:]
         matched = False
-        for raw, key in (
-            ("\x1b[A", KEY_UP),
-            ("\x1b[B", KEY_DOWN),
-            ("\x1b[C", KEY_RIGHT),
-            ("\x1b[D", KEY_LEFT),
-            ("\x1b[5~", KEY_PAGE_UP),
-            ("\x1b[6~", KEY_PAGE_DOWN),
-        ):
+        for raw, key in ESCAPE_KEY_SEQUENCES:
             if sequence.startswith(raw):
                 keys.append(key)
                 index += len(raw)
                 matched = True
                 break
-        if not matched:
-            keys.append(KEY_ESC)
-            index += 1
-    return keys
+        if matched:
+            continue
+        if not flush_incomplete and any(raw.startswith(sequence) for raw, _key in ESCAPE_KEY_SEQUENCES):
+            return keys, sequence
+        keys.append(KEY_ESC)
+        index += 1
+    return keys, ""
 
 
 def is_printable_key(key: str) -> bool:

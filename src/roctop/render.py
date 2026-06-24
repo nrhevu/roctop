@@ -902,10 +902,11 @@ def render_kill_confirm_menu(process_state: ProcessViewState) -> Text | None:
     if process_state.mode != MODE_KILL_CONFIRM:
         return None
     menu = Text(no_wrap=True, overflow="ellipsis")
-    if process_state.selected_pid is None:
+    target_pid = process_state.kill_confirm_pid if process_state.kill_confirm_pid is not None else process_state.selected_pid
+    if target_pid is None:
         menu.append("Kill process: ", style=f"bold {DRACULA_RED}")
     else:
-        menu.append(f"Kill PID {process_state.selected_pid}: ", style=f"bold {DRACULA_RED}")
+        menu.append(f"Kill PID {target_pid}: ", style=f"bold {DRACULA_RED}")
     for index, option in enumerate(KILL_CONFIRM_OPTIONS):
         if index:
             menu.append("   ")

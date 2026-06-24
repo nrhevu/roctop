@@ -3,6 +3,8 @@ from __future__ import annotations
 import signal
 import unittest
 
+from unittest.mock import patch
+
 from roctop.interaction import (
     KEY_BACKSPACE,
     KEY_DOWN,
@@ -21,6 +23,7 @@ from roctop.interaction import (
     MODE_SORT_MENU,
     ProcessViewState,
     STATUS_MESSAGE_SECONDS,
+    TerminalKeyboard,
     elapsed_seconds,
     max_help_scroll_offset,
     max_process_info_scroll_offset,
@@ -50,6 +53,31 @@ class InteractionTests(unittest.TestCase):
                 "esc",
             ],
         )
+
+    def test_terminal_keyboard_buffers_split_escape_sequence(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+        reads = [b"\x1b[", b"A"]
+
+        with (
+            patch("roctop.interaction.select.select", return_value=([1], [], [])),
+            patch("roctop.interaction.os.read", side_effect=reads),
+        ):
+            self.assertEqual(keyboard.read_keys(), [])
+            self.assertEqual(keyboard.read_keys(), [KEY_UP])
+
+    def test_terminal_keyboard_flushes_standalone_escape_after_timeout(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+
+        with (
+            patch("roctop.interaction.select.select", side_effect=[([1], [], []), ([], [], [])]),
+            patch("roctop.interaction.os.read", return_value=b"\x1b"),
+        ):
+            self.assertEqual(keyboard.read_keys(), [])
+            self.assertEqual(keyboard.read_keys(), ["esc"])
 
     def test_cursor_movement_and_page_keys_clamp(self) -> None:
         processes = [proc(pid) for pid in range(100, 106)]
@@ -579,9 +607,11 @@ class InteractionTests(unittest.TestCase):
         state.handle_key("x", processes)
         self.assertEqual(state.mode, MODE_KILL_CONFIRM)
         self.assertEqual(state.kill_confirm_index, 0)
+        self.assertEqual(state.kill_confirm_pid, 42)
         self.assertEqual(state.status_message, "")
         state.handle_key(KEY_ENTER, processes, kill_func=record)
         self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertIsNone(state.kill_confirm_pid)
         self.assertEqual(calls, [])
         self.assertEqual(state.status_message, "")
 
@@ -599,6 +629,21 @@ class InteractionTests(unittest.TestCase):
         state.handle_key(KEY_ENTER, processes, kill_func=record)
         self.assertEqual(calls[-1], (42, signal.SIGKILL))
         self.assertIn("Sent SIGKILL", state.status_message)
+
+    def test_kill_confirm_does_not_follow_selection_after_refresh(self) -> None:
+        calls: list[tuple[int, signal.Signals]] = []
+        state = ProcessViewState(selected_pid=42, viewport_rows=3)
+        old_processes = [proc(42)]
+        new_processes = [proc(43)]
+        state.sync(old_processes)
+        state.handle_key("x", old_processes, processes_synced=True)
+
+        state.handle_key("y", new_processes, kill_func=lambda pid, sig: calls.append((pid, sig)))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertIsNone(state.kill_confirm_pid)
+        self.assertEqual(state.status_message, "PID 42 is no longer running")
 
     def test_kill_confirm_uses_h_l_for_left_right(self) -> None:
         processes = [proc(42)]

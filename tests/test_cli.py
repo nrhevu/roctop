@@ -58,6 +58,18 @@ class CliTests(unittest.TestCase):
         finally:
             cli.run_live = original_run_live
 
+    def test_main_version_prints_package_version(self) -> None:
+        output = StringIO()
+
+        with (
+            patch("sys.stdout", output),
+            self.assertRaises(SystemExit) as context,
+        ):
+            cli.main(["--version"])
+
+        self.assertEqual(context.exception.code, 0)
+        self.assertIn(f"roctop {cli.__version__}", output.getvalue())
+
     def test_collect_snapshot_retry_swallows_timeout(self) -> None:
         calls = 0
         expected = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0))

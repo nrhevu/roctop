@@ -63,6 +63,27 @@ GPU_MODEL_BY_ARCHITECTURE = {
     "gfx942": "AMD Instinct MI300 Series",
     "gfx950": "AMD Instinct MI350 Series",
 }
+MEMORY_UNIT_MULTIPLIERS = {
+    "b": 1,
+    "byte": 1,
+    "bytes": 1,
+    "kb": 1000,
+    "kbyte": 1000,
+    "kbytes": 1000,
+    "kib": 1024,
+    "mib": 1024**2,
+    "gib": 1024**3,
+    "tib": 1024**4,
+    "mb": 1000**2,
+    "mbyte": 1000**2,
+    "mbytes": 1000**2,
+    "gb": 1000**3,
+    "gbyte": 1000**3,
+    "gbytes": 1000**3,
+    "tb": 1000**4,
+    "tbyte": 1000**4,
+    "tbytes": 1000**4,
+}
 INSTINCT_MODEL_BY_TOKEN = {
     "mi6": "AMD Radeon Instinct MI6",
     "mi8": "AMD Radeon Instinct MI8",
@@ -309,6 +330,7 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
             )
         )
 
+    apply_gpu_memory_percent(processes, gpus)
     return gpus, processes, driver_version
 
 
@@ -322,10 +344,11 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
             continue
         parts = [part.strip() for part in str(raw_value).split(",")]
         name = parts[0] if parts else ""
+        gpu_index = parse_int(parts[1] if len(parts) > 1 else None, default=-1)
         gpu_memory = parse_int(parts[2] if len(parts) > 2 else 0)
         processes.append(
             ProcessInfo(
-                gpu_index=None,
+                gpu_index=gpu_index if gpu_index >= 0 else None,
                 pid=pid,
                 name=name,
                 command=name,
@@ -359,11 +382,11 @@ def parse_amd_smi_process_json(data: list[dict[str, Any]], gpus: list[GpuInfo]) 
             pid = parse_int(info.get("pid"), default=-1)
             if pid < 0:
                 continue
-            gpu_memory = parse_int(value_field(info.get("mem_usage")))
+            gpu_memory = parse_memory_bytes_field(info.get("mem_usage"))
             if gpu_memory <= 0:
                 memory_usage = info.get("memory_usage", {})
                 if isinstance(memory_usage, dict):
-                    gpu_memory = parse_int(value_field(memory_usage.get("vram_mem", {})))
+                    gpu_memory = parse_memory_bytes_field(memory_usage.get("vram_mem", {}))
             if gpu_memory <= 0:
                 continue
             total = total_by_gpu.get(gpu_index, 0)
@@ -382,6 +405,15 @@ def parse_amd_smi_process_json(data: list[dict[str, Any]], gpus: list[GpuInfo]) 
                 )
             )
     return processes
+
+
+def apply_gpu_memory_percent(processes: list[ProcessInfo], gpus: list[GpuInfo]) -> None:
+    total_by_gpu = {gpu.index: gpu.memory_total_bytes for gpu in gpus}
+    for proc in processes:
+        if proc.gpu_index is None:
+            continue
+        total = total_by_gpu.get(proc.gpu_index, 0)
+        proc.gpu_memory_percent = proc.gpu_memory_bytes / total * 100.0 if total > 0 else 0.0
 
 
 def merge_process_sources(primary: list[ProcessInfo], fallback: list[ProcessInfo]) -> list[ProcessInfo]:
@@ -661,10 +693,18 @@ def load_json_from_text(text: str) -> Any:
     raise json.JSONDecodeError("no JSON object found", text, 0)
 
 
-def value_field(value: Any) -> Any:
-    if isinstance(value, dict) and "value" in value:
-        return value["value"]
-    return value
+def parse_memory_bytes_field(value: Any) -> int:
+    if not isinstance(value, dict):
+        return parse_int(value)
+    amount = value.get("value")
+    if isinstance(amount, str):
+        amount = amount.replace(",", "")
+    return int(parse_number(amount, 0.0) * memory_unit_multiplier(value.get("unit")))
+
+
+def memory_unit_multiplier(unit: Any) -> int:
+    text = str(unit or "b").strip().lower().replace(" ", "")
+    return MEMORY_UNIT_MULTIPLIERS.get(text, 1)
 
 
 def first_non_empty(*values: Any) -> str:
@@ -806,9 +846,12 @@ def parse_optional_float(value: Any) -> float | None:
     if value is None:
         return None
     text = str(value).strip()
-    if not text or text.upper() == "N/A":
+    if not text or text.upper() == "N/A" or "not supported" in text.lower():
         return None
-    return parse_number(text)
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
+    if not match:
+        return None
+    return float(match.group(0))
 
 
 def parse_clock_mhz(value: Any) -> int | None:

@@ -24,6 +24,9 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 
 ## Install
 
+`roctop` expects ROCm command-line tools on `PATH`: `rocm-smi` is required,
+and `amd-smi` is used when available for richer per-process memory data.
+
 From GitHub:
 
 ```bash
@@ -48,6 +51,7 @@ roctop --interval 0.5
 roctop --once
 roctop --json
 roctop --version
+python -m roctop --once
 ```
 
 ## Live Controls
@@ -61,6 +65,7 @@ p                 jump to parent process in tree view
 h/Left, l/Right   jump to previous/next sibling in tree view
 /                 search processes
 n/N               next/previous search match
+f                 filter visible processes
 i                 show selected process details
 x                 kill selected process with confirmation
 ?                 open/close help
@@ -74,4 +79,8 @@ j/k or Up/Down      scroll help or process info
 h/l or Left/Right   page help or process info
 ? or Esc            close help
 i or Esc            close process info
+h/l or arrows       move sort or kill menu selection
+Enter               apply selected sort or kill option
+y                   send SIGTERM in kill confirmation
+Esc or q            cancel menus
 ```
