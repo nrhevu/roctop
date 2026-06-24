@@ -44,14 +44,6 @@ Re-run this when `skills/` changes so local skill behavior matches the repo. Use
 
 Use 4-space indentation, type hints, and small functions with explicit dataclasses for structured data. Match the existing straightforward Python style; avoid broad refactors while fixing targeted behavior. Use `snake_case` for functions and variables, `PascalCase` for dataclasses and exceptions, and uppercase constants for command arguments or color constants. There is no configured formatter or linter in `pyproject.toml`, so keep formatting consistent with nearby code.
 
-## Live Metrics Graph Rules
-
-The live metric graphs are intentionally decoupled from table refresh. `--interval` controls collector/table cadence only; graph rendering should advance on a stable 1-second clock. Keep graph samples bucketed by whole seconds so subsecond live redraws do not shift historical columns.
-
-Graph columns use braille cells with two horizontal dot columns packed into one terminal cell. Preserve this dotted style instead of replacing it with solid block characters. When changing graph timing, ensure each tick advances at most one time bucket and does not skip forward multiple visible columns.
-
-Once a graph bucket has been rendered, it must remain stable. Do not recompute already-rendered buckets from raw history on later frames, because late or subsecond samples can make existing dots disappear. Also avoid appending placeholder buckets before collector data exists for that bucket; wait for real history data, then append and freeze the bucket.
-
 ## Testing Guidelines
 
 Tests use the standard-library `unittest` framework. Add focused regression tests when fixing parser, rendering, interaction, or CLI behavior. Test files are named `tests/test_*.py`, and test methods use `test_*`. Prefer synthetic fixtures over host-dependent ROCm state so tests remain deterministic.
