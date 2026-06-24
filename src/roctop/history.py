@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,34 +38,39 @@ class MetricsHistory:
         self.meminfo_path = Path(meminfo_path)
         self._samples: deque[MetricSample] = deque(maxlen=self.max_samples)
         self._previous_cpu_times: CpuTimes | None = None
+        self._lock = threading.RLock()
 
     @property
     def samples(self) -> tuple[MetricSample, ...]:
-        return tuple(self._samples)
+        with self._lock:
+            return tuple(self._samples)
 
     def append_sample(self, sample: MetricSample) -> None:
-        self._samples.append(sample)
+        with self._lock:
+            self._samples.append(sample)
 
     def prime_cpu(self) -> None:
         cpu_times = read_cpu_times(self.stat_path)
         if cpu_times is not None:
-            self._previous_cpu_times = cpu_times
+            with self._lock:
+                self._previous_cpu_times = cpu_times
 
     def add_snapshot(self, snapshot: Snapshot) -> MetricSample:
-        cpu_times = read_cpu_times(self.stat_path)
-        cpu_percent = cpu_percent_from_times(self._previous_cpu_times, cpu_times)
-        if cpu_times is not None:
-            self._previous_cpu_times = cpu_times
+        with self._lock:
+            cpu_times = read_cpu_times(self.stat_path)
+            cpu_percent = cpu_percent_from_times(self._previous_cpu_times, cpu_times)
+            if cpu_times is not None:
+                self._previous_cpu_times = cpu_times
 
-        sample = MetricSample(
-            timestamp=snapshot.timestamp,
-            avg_cpu_percent=cpu_percent,
-            avg_mem_percent=read_mem_percent(self.meminfo_path),
-            avg_gpu_percent=average_gpu_percent(snapshot),
-            avg_gpu_mem_percent=average_gpu_mem_percent(snapshot),
-        )
-        self.append_sample(sample)
-        return sample
+            sample = MetricSample(
+                timestamp=snapshot.timestamp,
+                avg_cpu_percent=cpu_percent,
+                avg_mem_percent=read_mem_percent(self.meminfo_path),
+                avg_gpu_percent=average_gpu_percent(snapshot),
+                avg_gpu_mem_percent=average_gpu_mem_percent(snapshot),
+            )
+            self._samples.append(sample)
+            return sample
 
 
 def read_cpu_times(path: str | Path = "/proc/stat") -> CpuTimes | None:

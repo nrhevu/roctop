@@ -13,7 +13,7 @@ from rich.live import Live
 
 from . import __version__
 from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot, read_process_detail
-from .history import MetricsHistory
+from .history import MetricSample, MetricsHistory
 from .interaction import (
     KEY_DOWN,
     KEY_ENTER,
@@ -39,7 +39,6 @@ from .render import render_snapshot
 
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
-LIVE_RENDER_SECONDS = 1.0
 
 
 @dataclass(slots=True)
@@ -48,10 +47,22 @@ class SnapshotUpdate:
     snapshot: Snapshot
 
 
+@dataclass(frozen=True, slots=True)
+class GraphFrame:
+    display_time: datetime
+    history_samples: tuple[MetricSample, ...]
+
+
 class BackgroundSnapshotCollector:
-    def __init__(self, interval: float, collect_func: Callable[[], Snapshot] | None = None) -> None:
+    def __init__(
+        self,
+        interval: float,
+        collect_func: Callable[[], Snapshot] | None = None,
+        history: MetricsHistory | None = None,
+    ) -> None:
         self.interval = interval
         self.collect_func = collect_func or collect_snapshot
+        self.history = history
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -98,6 +109,8 @@ class BackgroundSnapshotCollector:
                 return
 
             if snapshot is not None:
+                if self.history is not None:
+                    self.history.add_snapshot(snapshot)
                 with self._lock:
                     self._sequence += 1
                     self._latest = SnapshotUpdate(sequence=self._sequence, snapshot=snapshot)
@@ -158,11 +171,12 @@ def run_live(console: Console, interval: float) -> int:
     history.prime_cpu()
     snapshot = collect_snapshot_retry(interval)
     history.add_snapshot(snapshot)
-    collector = BackgroundSnapshotCollector(interval)
+    collector = BackgroundSnapshotCollector(interval, history=history)
+    graph_frame = capture_graph_frame(history)
     with (
         TerminalKeyboard() as keyboard,
         Live(
-            render_live_snapshot(snapshot, history, process_state, console, interval=interval),
+            render_live_snapshot(snapshot, history, process_state, console, interval=interval, graph_frame=graph_frame),
             console=console,
             screen=True,
             auto_refresh=False,
@@ -170,7 +184,17 @@ def run_live(console: Console, interval: float) -> int:
     ):
         collector.start()
         try:
-            poll_live_until_quit(live, keyboard, snapshot, history, process_state, console, collector, interval)
+            poll_live_until_quit(
+                live,
+                keyboard,
+                snapshot,
+                history,
+                process_state,
+                console,
+                collector,
+                interval,
+                graph_frame=graph_frame,
+            )
         finally:
             collector.stop()
     return 0
@@ -185,11 +209,13 @@ def poll_live_until_quit(
     console: Console,
     collector: BackgroundSnapshotCollector,
     interval: float,
+    graph_frame: GraphFrame | None = None,
 ) -> None:
     rendered_size = console_dimensions(console)
     latest_sequence = 0
     render_interval = live_render_interval(interval)
     next_render_at = time.monotonic() + render_interval
+    graph_frame = graph_frame or capture_graph_frame(history)
     while True:
         collector.raise_if_failed()
         update = collector.latest_after(latest_sequence)
@@ -202,10 +228,17 @@ def poll_live_until_quit(
         status_expired = process_state.expire_status_message(now)
         refresh_due = now >= next_render_at
         if refresh_due:
-            history.add_snapshot(snapshot)
+            graph_frame = capture_graph_frame(history)
         if current_size != rendered_size or status_expired or refresh_due:
             live.update(
-                render_live_snapshot(snapshot, history, process_state, console, interval=interval),
+                render_live_snapshot(
+                    snapshot,
+                    history,
+                    process_state,
+                    console,
+                    interval=interval,
+                    graph_frame=graph_frame,
+                ),
                 refresh=True,
             )
             rendered_size = current_size
@@ -227,6 +260,7 @@ def poll_live_until_quit(
                 console,
                 display_processes=processes,
                 interval=interval,
+                graph_frame=graph_frame,
             ),
             refresh=True,
         )
@@ -382,20 +416,27 @@ def render_live_snapshot(
     console: Console,
     display_processes: list[ProcessInfo] | None = None,
     interval: float = 1.0,
+    graph_frame: GraphFrame | None = None,
 ):
+    frame = graph_frame or capture_graph_frame(history)
     return render_snapshot(
         snapshot,
         history,
         process_state,
         *console_dimensions(console),
         display_processes=display_processes,
-        display_time=datetime.now(),
+        display_time=frame.display_time,
         show_subsecond_time=interval < 1.0,
+        history_samples=frame.history_samples,
     )
 
 
+def capture_graph_frame(history: MetricsHistory) -> GraphFrame:
+    return GraphFrame(display_time=datetime.now(), history_samples=history.samples)
+
+
 def live_render_interval(interval: float) -> float:
-    return LIVE_RENDER_SECONDS
+    return max(KEY_POLL_SECONDS, interval)
 
 
 def console_dimensions(console: Console) -> tuple[int, int]:

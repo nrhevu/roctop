@@ -185,7 +185,7 @@ class CliTests(unittest.TestCase):
         self.assertGreaterEqual(len(live.updates), 2)
         self.assertTrue(all(refresh for _renderable, refresh in live.updates))
 
-    def test_live_loop_redraws_once_per_second_without_snapshot_update(self) -> None:
+    def test_live_loop_redraws_on_requested_interval_without_snapshot_update(self) -> None:
         class FakeConsole:
             @property
             def size(self) -> FakeConsoleSize:
@@ -247,9 +247,9 @@ class CliTests(unittest.TestCase):
             cli.time.monotonic = original_monotonic
 
         self.assertGreaterEqual(len(live.update_times), 4)
-        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [1.0, 2.0, 3.0])
+        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [0.1, 0.2, 0.3])
 
-    def test_live_loop_samples_history_once_per_second_with_fast_collector(self) -> None:
+    def test_live_loop_renders_on_requested_interval_with_fast_collector(self) -> None:
         class FakeConsole:
             @property
             def size(self) -> FakeConsoleSize:
@@ -270,15 +270,6 @@ class CliTests(unittest.TestCase):
                     snapshot=Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)),
                 )
 
-        class CountingHistory(cli.MetricsHistory):
-            def __init__(self) -> None:
-                super().__init__(max_samples=120, stat_path="/missing/stat", meminfo_path="/missing/meminfo")
-                self.added_snapshots: list[Snapshot] = []
-
-            def add_snapshot(self, snapshot: Snapshot):
-                self.added_snapshots.append(snapshot)
-                return super().add_snapshot(snapshot)
-
         class FakeClock:
             def __init__(self) -> None:
                 self.current = 0.0
@@ -298,19 +289,18 @@ class CliTests(unittest.TestCase):
                 self.update_times.append(self.clock.current)
 
         class FakeKeyboard:
-            def __init__(self, clock: FakeClock, history: CountingHistory) -> None:
+            def __init__(self, clock: FakeClock, live: FakeLive) -> None:
                 self.clock = clock
-                self.history = history
+                self.live = live
 
             def read_keys(self, timeout: float):
                 self.clock.advance(timeout)
-                if len(self.history.added_snapshots) >= 3:
+                if len(self.live.update_times) >= 3:
                     return ["q"]
                 return []
 
         clock = FakeClock()
         collector = FakeCollector()
-        history = CountingHistory()
         live = FakeLive(clock)
         original_monotonic = cli.time.monotonic
 
@@ -318,9 +308,9 @@ class CliTests(unittest.TestCase):
             cli.time.monotonic = clock.monotonic
             cli.poll_live_until_quit(
                 live,
-                FakeKeyboard(clock, history),
+                FakeKeyboard(clock, live),
                 Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)),
-                history,
+                cli.MetricsHistory(max_samples=120),
                 cli.ProcessViewState(),
                 FakeConsole(),
                 collector,
@@ -329,9 +319,59 @@ class CliTests(unittest.TestCase):
         finally:
             cli.time.monotonic = original_monotonic
 
-        self.assertGreater(collector.update_count, len(history.added_snapshots))
-        self.assertEqual(len(history.added_snapshots), 3)
-        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [1.0, 2.0, 3.0])
+        self.assertGreater(collector.update_count, len(live.update_times))
+        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [0.1, 0.2, 0.3])
+
+    def test_live_render_interval_uses_key_poll_floor(self) -> None:
+        self.assertEqual(cli.live_render_interval(0.01), cli.KEY_POLL_SECONDS)
+        self.assertEqual(cli.live_render_interval(0.25), 0.25)
+
+    def test_live_render_snapshot_uses_cached_graph_frame(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=35, width=160)
+
+        history = cli.MetricsHistory(max_samples=120)
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=10.0,
+                avg_mem_percent=20.0,
+                avg_gpu_percent=30.0,
+                avg_gpu_mem_percent=40.0,
+            )
+        )
+        graph_frame = cli.GraphFrame(
+            display_time=datetime(2026, 6, 22, 12, 0, 0),
+            history_samples=history.samples,
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 1),
+                avg_cpu_percent=90.0,
+                avg_mem_percent=80.0,
+                avg_gpu_percent=70.0,
+                avg_gpu_mem_percent=60.0,
+            )
+        )
+
+        console = Console(width=160, record=True, file=StringIO())
+        console.print(
+            cli.render_live_snapshot(
+                Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 1)),
+                history,
+                cli.ProcessViewState(),
+                FakeConsole(),
+                graph_frame=graph_frame,
+            )
+        )
+        output = console.export_text()
+
+        self.assertIn("Avg %CPU: 10.0%", output)
+        self.assertIn("Avg %GPU: 30.0%", output)
+        self.assertNotIn("90.0%", output)
+        self.assertNotIn("70.0%", output)
 
     def test_poll_input_batches_movement_keys_into_one_render(self) -> None:
         class FakeConsole:
@@ -612,6 +652,43 @@ class CliTests(unittest.TestCase):
         intervals = [end - start for start, end in zip(collect_starts, collect_starts[1:])]
         self.assertGreaterEqual(len(intervals), 2)
         self.assertLess(max(intervals[:2]), interval + collect_seconds * 0.75)
+
+    def test_background_collector_samples_history_without_live_render(self) -> None:
+        sampled_three = threading.Event()
+
+        class CountingHistory(cli.MetricsHistory):
+            def __init__(self) -> None:
+                super().__init__(max_samples=120, stat_path="/missing/stat", meminfo_path="/missing/meminfo")
+                self.added_snapshots: list[Snapshot] = []
+
+            def add_snapshot(self, snapshot: Snapshot):
+                sample = super().add_snapshot(snapshot)
+                self.added_snapshots.append(snapshot)
+                if len(self.added_snapshots) >= 3:
+                    sampled_three.set()
+                return sample
+
+        calls = 0
+
+        def fake_collect_snapshot() -> Snapshot:
+            nonlocal calls
+            calls += 1
+            return Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, calls))
+
+        history = CountingHistory()
+        collector = cli.BackgroundSnapshotCollector(
+            interval=0.01,
+            collect_func=fake_collect_snapshot,
+            history=history,
+        )
+        collector.start()
+        try:
+            self.assertTrue(sampled_three.wait(timeout=1.0))
+        finally:
+            collector.stop()
+
+        self.assertGreaterEqual(len(history.added_snapshots), 3)
+        self.assertGreaterEqual(len(history.samples), 3)
 
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()

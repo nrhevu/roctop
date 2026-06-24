@@ -15,7 +15,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .formatting import clamp_percent, format_bytes_mib, percent_text
-from .history import MetricsHistory
+from .history import MetricSample, MetricsHistory
 from .interaction import (
     HELP_ENTRIES,
     HELP_VISIBLE_ROWS,
@@ -155,6 +155,7 @@ def render_snapshot(
     display_processes: list[ProcessInfo] | None = None,
     display_time: datetime | None = None,
     show_subsecond_time: bool = False,
+    history_samples: Sequence[MetricSample] | None = None,
 ) -> Group | PopupOverlay:
     with profile_span("render"):
         gpu_table = render_gpu_table(snapshot.gpus)
@@ -176,7 +177,7 @@ def render_snapshot(
         )
         parts = [header, gpu_table]
         if history is not None:
-            parts.append(render_metrics_graphs(history))
+            parts.append(render_metrics_graphs(history, end_time=display_time, samples=history_samples))
         parts.append(process_table)
         visible_warnings = ui_warnings(snapshot.warnings)
         if visible_warnings:
@@ -522,13 +523,19 @@ def unique_non_empty(values) -> list[str]:
     return unique
 
 
-def render_metrics_graphs(history: MetricsHistory) -> Table:
+def render_metrics_graphs(
+    history: MetricsHistory,
+    end_time: datetime | None = None,
+    samples: Sequence[MetricSample] | None = None,
+) -> Table:
+    metric_samples = tuple(samples) if samples is not None else history.samples
     table = Table(box=box.SQUARE, expand=True, show_header=False, padding=(0, 1))
     table.add_column(ratio=1)
     table.add_column(ratio=1)
     table.add_row(
         MetricGraphPair(
-            history=history,
+            samples=metric_samples,
+            end_time=end_time,
             top_metric_name="avg_cpu_percent",
             top_label="Avg %CPU",
             top_style=DRACULA_CYAN,
@@ -537,7 +544,8 @@ def render_metrics_graphs(history: MetricsHistory) -> Table:
             bottom_style=DRACULA_PINK,
         ),
         MetricGraphPair(
-            history=history,
+            samples=metric_samples,
+            end_time=end_time,
             top_metric_name="avg_gpu_percent",
             top_label="Avg %GPU",
             top_style=DRACULA_ORANGE,
@@ -551,7 +559,8 @@ def render_metrics_graphs(history: MetricsHistory) -> Table:
 
 @dataclass(frozen=True, slots=True)
 class MetricGraphPair:
-    history: MetricsHistory
+    samples: Sequence[MetricSample]
+    end_time: datetime | None
     top_metric_name: str
     top_label: str
     top_style: str
@@ -562,8 +571,9 @@ class MetricGraphPair:
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         width = max(12, options.max_width)
-        top_values = [getattr(sample, self.top_metric_name) for sample in self.history.samples]
-        bottom_values = [getattr(sample, self.bottom_metric_name) for sample in self.history.samples]
+        graph_columns = width * GRAPH_COLUMNS_PER_CELL
+        top_values = metric_values_by_time(self.samples, self.top_metric_name, graph_columns, self.end_time)
+        bottom_values = metric_values_by_time(self.samples, self.bottom_metric_name, graph_columns, self.end_time)
         yield metric_label(self.top_label, latest_value(top_values), self.top_style)
         yield from metric_graph_lines(top_values, width=width, height=self.height, style=self.top_style, trim_empty=False)
         yield time_axis_line(width)
@@ -618,6 +628,35 @@ def latest_value(values: Sequence[float | None]) -> float | None:
         if value is not None:
             return value
     return None
+
+
+def metric_values_by_time(
+    samples: Sequence[MetricSample],
+    metric_name: str,
+    seconds: int,
+    end_time: datetime | None = None,
+) -> list[float | None]:
+    seconds = max(1, seconds)
+    values: list[float | None] = [None] * seconds
+    if not samples:
+        return values
+    graph_end_time = end_time or samples[-1].timestamp
+    for sample in samples:
+        elapsed_seconds = (graph_end_time - sample.timestamp).total_seconds()
+        if elapsed_seconds < -0.5:
+            continue
+        offset = max(0, int(elapsed_seconds))
+        if offset >= seconds:
+            continue
+        values[seconds - 1 - offset] = getattr(sample, metric_name)
+
+    last_value: float | None = None
+    for index, value in enumerate(values):
+        if value is None:
+            values[index] = last_value
+        else:
+            last_value = value
+    return values
 
 
 def metric_graph_lines(

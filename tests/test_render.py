@@ -215,6 +215,44 @@ class RenderTests(unittest.TestCase):
         lines = metric_graph_lines([25.0, 25.0], width=1, height=4, style="green", trim_empty=False)
         self.assertEqual(lines[0].plain, "⣀")
 
+    def test_metric_values_follow_sample_timestamps(self) -> None:
+        samples = [
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=10.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            ),
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 5),
+                avg_cpu_percent=50.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            ),
+        ]
+
+        values = render.metric_values_by_time(
+            samples,
+            "avg_cpu_percent",
+            seconds=8,
+            end_time=datetime(2026, 6, 22, 12, 0, 5),
+        )
+        self.assertEqual(values[-1], 50.0)
+        self.assertEqual(values[-6], 10.0)
+        self.assertEqual(values[-2], 10.0)
+
+        shifted_values = render.metric_values_by_time(
+            samples,
+            "avg_cpu_percent",
+            seconds=8,
+            end_time=datetime(2026, 6, 22, 12, 0, 7),
+        )
+        self.assertEqual(shifted_values[-3], 50.0)
+        self.assertEqual(shifted_values[-4], 10.0)
+        self.assertEqual(shifted_values[-1], 50.0)
+
     def test_time_axis_uses_one_second_offsets(self) -> None:
         axis = render.time_axis_line(130).plain
         self.assertEqual(axis.index("120s"), 65)
