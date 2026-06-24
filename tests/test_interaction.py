@@ -230,6 +230,53 @@ class InteractionTests(unittest.TestCase):
         self.assertFalse(result.changed)
         self.assertEqual(state.selected_pid, 11)
 
+    def test_tree_mode_h_l_jump_between_visible_siblings(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=10, args="parent"),
+            proc(11, ppid=10, args="child-a"),
+            proc(111, ppid=11, args="grandchild"),
+            proc(12, ppid=10, args="child-b"),
+        ]
+        state = ProcessViewState(selected_pid=11, tree_mode=True, viewport_rows=4)
+        state.sync(processes)
+
+        state.handle_key("l", processes, processes_synced=True)
+
+        self.assertEqual(state.selected_pid, 12)
+        self.assertEqual(state.status_message, "")
+
+        state.handle_key("h", processes, processes_synced=True)
+
+        self.assertEqual(state.selected_pid, 11)
+
+    def test_tree_mode_left_right_jump_between_visible_siblings(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=10, args="parent"),
+            proc(11, ppid=10, args="child-a"),
+            proc(12, ppid=10, args="child-b"),
+        ]
+        state = ProcessViewState(selected_pid=11, tree_mode=True, viewport_rows=4)
+        state.sync(processes)
+
+        state.handle_key(KEY_RIGHT, processes, processes_synced=True)
+        self.assertEqual(state.selected_pid, 12)
+
+        state.handle_key(KEY_LEFT, processes, processes_synced=True)
+        self.assertEqual(state.selected_pid, 11)
+
+    def test_tree_mode_sibling_jump_reports_when_no_sibling_is_visible(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=10, args="parent"),
+            proc(11, ppid=10, args="only-child"),
+        ]
+        state = ProcessViewState(selected_pid=11, tree_mode=True, viewport_rows=4)
+        state.sync(processes)
+
+        state.handle_key("l", processes, processes_synced=True)
+
+        self.assertEqual(state.selected_pid, 11)
+        self.assertEqual(state.status_message, "No visible sibling process")
+
     def test_search_mode_commits_query_and_matches_command_pid_or_user(self) -> None:
         processes = [
             proc(100, user="alice", args="demo::trainer --batch-size 64"),

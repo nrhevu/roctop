@@ -56,6 +56,7 @@ PgUp/PgDn         scroll processes
 s                 open sort menu
 t                 toggle process tree
 p                 jump to parent process in tree view
+h/Left, l/Right jump to previous/next sibling in tree view
 /                 search processes
 n/N               next/previous search match
 x                 kill selected process with confirmation

@@ -229,6 +229,12 @@ class ProcessViewState:
         if key == "p" and self.tree_mode:
             self.select_parent_process(processes)
             return KeyResult(changed=True)
+        if key in ("h", KEY_LEFT) and self.tree_mode:
+            self.select_sibling_process(processes, direction=-1)
+            return KeyResult(changed=True)
+        if key in ("l", KEY_RIGHT) and self.tree_mode:
+            self.select_sibling_process(processes, direction=1)
+            return KeyResult(changed=True)
         if key in ("j", KEY_DOWN):
             self.move_selection(processes, 1)
             return KeyResult(changed=True)
@@ -416,6 +422,25 @@ class ProcessViewState:
         self.select_index(processes, parent_index)
         self.ensure_selected_visible(len(processes))
         self.clear_status_message()
+
+    def select_sibling_process(self, processes: list[ProcessInfo], direction: int) -> None:
+        if not processes:
+            self.sync(processes)
+            return
+        parent_keys = visible_tree_parent_keys(processes)
+        selected_parent_key = parent_keys[self.selected_index]
+        if direction >= 0:
+            sibling_indices = range(self.selected_index + 1, len(processes))
+        else:
+            sibling_indices = range(self.selected_index - 1, -1, -1)
+        for index in sibling_indices:
+            if parent_keys[index] != selected_parent_key:
+                continue
+            self.select_index(processes, index)
+            self.ensure_selected_visible(len(processes))
+            self.clear_status_message()
+            return
+        self.set_status_message("No visible sibling process")
 
     def search_next(self, processes: list[ProcessInfo], direction: int, processes_synced: bool = False) -> bool:
         query = self.search_query.strip()
@@ -705,6 +730,20 @@ def sorted_tree_keys(
 def default_tree_sort_key(proc: ProcessInfo) -> tuple[int, bool, int]:
     gpu_index = proc.gpu_index if proc.gpu_index is not None else 9999
     return (proc.pid, proc.gpu_index is None, gpu_index)
+
+
+def visible_tree_parent_keys(processes: list[ProcessInfo]) -> list[ProcessSelectionKey | None]:
+    key_by_pid: dict[int, ProcessSelectionKey] = {}
+    for proc in processes:
+        key_by_pid.setdefault(proc.pid, process_selection_key(proc))
+
+    parent_keys: list[ProcessSelectionKey | None] = []
+    for proc in processes:
+        parent_key = key_by_pid.get(proc.ppid or -1)
+        if parent_key == process_selection_key(proc):
+            parent_key = None
+        parent_keys.append(parent_key)
+    return parent_keys
 
 
 def process_sort_key(proc: ProcessInfo, field: str):

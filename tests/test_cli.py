@@ -11,7 +11,7 @@ from rich.console import Console
 
 from roctop import cli
 from roctop.collectors import CommandInterrupted, CommandTimeout
-from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_UP
+from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP
 from roctop.models import ProcessInfo, Snapshot
 
 
@@ -508,6 +508,13 @@ class CliTests(unittest.TestCase):
         self.assertTrue(state.tree_mode)
         self.assertEqual([row.pid for row in processes], [7, 42])
         self.assertEqual(state.selected_pid, 7)
+
+    def test_sibling_keys_need_current_process_display(self) -> None:
+        state = cli.ProcessViewState(tree_mode=True)
+
+        for key in ("h", "l", KEY_LEFT, KEY_RIGHT):
+            with self.subTest(key=key):
+                self.assertTrue(cli.key_needs_current_processes(state, key))
 
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()

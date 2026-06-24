@@ -17,8 +17,10 @@ from .history import MetricsHistory
 from .interaction import (
     KEY_DOWN,
     KEY_ENTER,
+    KEY_LEFT,
     KEY_PAGE_DOWN,
     KEY_PAGE_UP,
+    KEY_RIGHT,
     KEY_UP,
     MODE_FILTER,
     MODE_KILL_CONFIRM,
@@ -304,7 +306,22 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
         return key == KEY_ENTER
     if process_state.mode == MODE_KILL_CONFIRM:
         return key in ("y", "Y", KEY_ENTER)
-    return key in ("j", "k", KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, "n", "N", "x", "p")
+    return key in (
+        "h",
+        "j",
+        "k",
+        "l",
+        KEY_LEFT,
+        KEY_RIGHT,
+        KEY_UP,
+        KEY_DOWN,
+        KEY_PAGE_UP,
+        KEY_PAGE_DOWN,
+        "n",
+        "N",
+        "x",
+        "p",
+    )
 
 
 def render_live_snapshot(
