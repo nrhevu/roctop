@@ -458,6 +458,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("x: kill", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
+        self.assertLess(plain.index("x: kill"), plain.index("?: help"))
+        self.assertLess(plain.index("?: help"), plain.index("q: quit"))
         self.assertIn("38;2;255;184;108", styled)
 
     def test_help_popup_overlays_process_table_without_reserving_rows(self) -> None:
