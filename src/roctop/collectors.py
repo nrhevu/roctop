@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -100,6 +101,12 @@ class CommandResult:
     stderr: str
 
 
+@dataclass(slots=True)
+class AmdSmiProcessCommand:
+    result: CommandResult | None = None
+    error: CollectionError | None = None
+
+
 class CollectionError(RuntimeError):
     pass
 
@@ -143,7 +150,7 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
     now = now or datetime.now()
     warnings: list[str] = []
 
-    rocm_result = run_command(ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS)
+    rocm_result, amd_process_command = collect_smi_command_results()
     warnings.extend(_warnings_from_result(rocm_result))
     if command_was_interrupted(rocm_result):
         raise CommandInterrupted(_command_failure_message(rocm_result))
@@ -154,9 +161,13 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
     gpus, rocm_processes, driver_version = parse_rocm_smi_json(rocm_data)
 
     process_rows: list[ProcessInfo] = []
-    if should_run_amd_smi_process():
+    if amd_process_command is not None:
         try:
-            amd_result = run_command(AMD_SMI_PROCESS_ARGS, timeout=AMD_SMI_PROCESS_TIMEOUT_SECONDS)
+            if amd_process_command.error is not None:
+                raise amd_process_command.error
+            if amd_process_command.result is None:
+                raise CollectionError("amd-smi process did not return a result")
+            amd_result = amd_process_command.result
             warnings.extend(_warnings_from_result(amd_result))
             if command_was_interrupted(amd_result):
                 raise CommandInterrupted(_command_failure_message(amd_result))
@@ -195,6 +206,25 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
         process_ancestors=process_ancestors,
         warnings=dedupe_preserving_order(warnings),
     )
+
+
+def collect_smi_command_results() -> tuple[CommandResult, AmdSmiProcessCommand | None]:
+    if not should_run_amd_smi_process():
+        return run_command(ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS), None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        rocm_future = executor.submit(run_command, ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS)
+        amd_future = executor.submit(run_command, AMD_SMI_PROCESS_ARGS, timeout=AMD_SMI_PROCESS_TIMEOUT_SECONDS)
+
+        rocm_result = rocm_future.result()
+        try:
+            amd_result = amd_future.result()
+        except CollectionError as exc:
+            amd_command = AmdSmiProcessCommand(error=exc)
+        else:
+            amd_command = AmdSmiProcessCommand(result=amd_result)
+
+    return rocm_result, amd_command
 
 
 def should_run_amd_smi_process() -> bool:

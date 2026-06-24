@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -70,6 +71,33 @@ class CollectorTests(unittest.TestCase):
             snapshot = collect_snapshot()
 
         self.assertEqual(snapshot.node_name, "node-a")
+
+    def test_collect_snapshot_runs_smi_commands_in_parallel(self) -> None:
+        rocm_started = threading.Event()
+        amd_started = threading.Event()
+
+        def fake_run_command(args, **kwargs) -> CommandResult:
+            if args[0] == "rocm-smi":
+                rocm_started.set()
+                self.assertTrue(amd_started.wait(timeout=1.0))
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout='{"system": {"Driver version": "6.14.14"}}',
+                    stderr="",
+                )
+            if args[0] == "amd-smi":
+                amd_started.set()
+                self.assertTrue(rocm_started.wait(timeout=1.0))
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            snapshot = collect_snapshot()
+
+        self.assertEqual(snapshot.driver_version, "6.14.14")
+        self.assertTrue(rocm_started.is_set())
+        self.assertTrue(amd_started.is_set())
 
     def test_amd_smi_process_timeout_falls_back_to_rocm_smi_process_rows(self) -> None:
         calls: list[tuple[list[str], float | None]] = []
