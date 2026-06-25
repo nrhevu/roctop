@@ -6,7 +6,7 @@ and GPU processes in a refreshing terminal UI.
 
 ## Demo
 
-![roctop demo](https://raw.githubusercontent.com/nrhevu/roctop/v0.3.2/docs/demo.svg)
+![roctop demo](https://raw.githubusercontent.com/nrhevu/roctop/v0.3.3/docs/demo.svg)
 
 The demo is rendered from synthetic data; process names, PIDs, users, and metrics are placeholders.
 
@@ -27,18 +27,18 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 `roctop` expects ROCm command-line tools on `PATH`: `rocm-smi` is required,
 and `amd-smi` is used when available for richer per-process memory data.
 
-From GitHub:
+From PyPI:
 
 ```bash
-python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install "git+https://github.com/nrhevu/roctop.git"
-export PATH="$PWD/.venv/bin:$PATH"
+pip install roctop
 ```
 
-From a local checkout:
+Build from source:
 
 ```bash
-python3 -m venv --system-site-packages .venv
+git clone https://github.com/nrhevu/roctop.git
+cd roctop
+python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 export PATH="$PWD/.venv/bin:$PATH"
 ```
