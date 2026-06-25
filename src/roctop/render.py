@@ -161,6 +161,7 @@ def render_snapshot(
     show_subsecond_time: bool = False,
     history_samples: Sequence[MetricSample] | None = None,
     graph_time: datetime | None = None,
+    graph_time_offset_seconds: int = 0,
 ) -> Group | PopupOverlay:
     with profile_span("render"):
         process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state)
@@ -185,7 +186,14 @@ def render_snapshot(
             )
             parts = [header, render_gpu_table(snapshot.gpus)]
             if history is not None:
-                parts.append(render_metrics_graphs(history, end_time=graph_time or display_time, samples=history_samples))
+                parts.append(
+                    render_metrics_graphs(
+                        history,
+                        end_time=graph_time or display_time,
+                        samples=history_samples,
+                        time_offset_seconds=graph_time_offset_seconds,
+                    )
+                )
             parts.append(process_table)
             visible_warnings = ui_warnings(snapshot.warnings)
             if visible_warnings:
@@ -588,6 +596,7 @@ def render_metrics_graphs(
     history: MetricsHistory,
     end_time: datetime | None = None,
     samples: Sequence[MetricSample] | None = None,
+    time_offset_seconds: int = 0,
 ) -> Table:
     metric_samples = tuple(samples) if samples is not None else history.samples
     table = Table(box=box.SQUARE, expand=True, show_header=False, padding=(0, 1))
@@ -603,6 +612,7 @@ def render_metrics_graphs(
             bottom_metric_name="avg_mem_percent",
             bottom_label="Avg %MEM",
             bottom_style=DRACULA_PINK,
+            time_offset_seconds=time_offset_seconds,
         ),
         MetricGraphPair(
             samples=metric_samples,
@@ -613,6 +623,7 @@ def render_metrics_graphs(
             bottom_metric_name="avg_gpu_mem_percent",
             bottom_label="Avg %GPU MEM",
             bottom_style=DRACULA_YELLOW,
+            time_offset_seconds=time_offset_seconds,
         ),
     )
     return table
@@ -628,6 +639,7 @@ class MetricGraphPair:
     bottom_metric_name: str
     bottom_label: str
     bottom_style: str
+    time_offset_seconds: int = 0
     height: int = 15
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
@@ -637,7 +649,7 @@ class MetricGraphPair:
         bottom_values = metric_values_by_time(self.samples, self.bottom_metric_name, graph_columns, self.end_time)
         yield metric_label(self.top_label, latest_value(top_values), self.top_style)
         yield from metric_graph_lines(top_values, width=width, height=self.height, style=self.top_style, trim_empty=False)
-        yield time_axis_line(width)
+        yield time_axis_line(width, offset_seconds=self.time_offset_seconds)
         yield from reversed(
             metric_graph_lines(
                 bottom_values,
@@ -661,19 +673,24 @@ def metric_label(label: str, value: float | None, style: str) -> Text:
     return text
 
 
-def time_axis_line(width: int) -> Text:
+def time_axis_line(width: int, offset_seconds: int = 0) -> Text:
     width = max(1, width)
+    offset_seconds = max(0, offset_seconds)
     chars = ["─"] * width
-    for seconds, label in (
-        (1080, "1080s"),
-        (720, "720s"),
-        (360, "360s"),
-        (240, "240s"),
-        (120, "120s"),
-        (60, "60s"),
-        (30, "30s"),
+    for seconds in (
+        1080,
+        720,
+        360,
+        240,
+        120,
+        60,
+        30,
     ):
-        marker = width - 1 - seconds // GRAPH_COLUMNS_PER_CELL
+        marker_seconds = seconds - offset_seconds
+        if marker_seconds <= 0:
+            continue
+        label = f"{seconds}s"
+        marker = width - 1 - marker_seconds // GRAPH_COLUMNS_PER_CELL
         start = marker - len(label)
         space = start - 1
         if space < 0 or start + len(label) > width:

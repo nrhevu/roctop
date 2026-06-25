@@ -40,6 +40,7 @@ from .render import render_snapshot
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
 GRAPH_FRAME_SECONDS = 1.0
+GRAPH_PAN_SECONDS = 10
 GRAPH_METRIC_FIELDS = (
     "avg_cpu_percent",
     "avg_mem_percent",
@@ -278,7 +279,13 @@ def poll_live_until_quit(
         if not keys:
             continue
 
-        quit_requested, processes = handle_key_batch(snapshot, process_state, keys)
+        quit_requested, processes = handle_key_batch(
+            snapshot,
+            process_state,
+            keys,
+            history=history,
+            graph_frame=graph_frame,
+        )
         rendered_size = console_dimensions(console)
         live.update(
             render_live_snapshot(
@@ -338,6 +345,8 @@ def handle_key_batch(
     snapshot: Snapshot,
     process_state: ProcessViewState,
     keys: list[str],
+    history: MetricsHistory | None = None,
+    graph_frame: GraphFrame | None = None,
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
     gpu_indices = snapshot_gpu_indices(snapshot)
@@ -353,6 +362,8 @@ def handle_key_batch(
             if key == "i" and process_state.mode == MODE_NORMAL:
                 open_selected_process_info(snapshot, process_state, processes)
                 continue
+            if handle_graph_pan_key(key, process_state, history, graph_frame):
+                continue
             view_before = process_view_key(process_state)
             result = process_state.handle_key(
                 key,
@@ -367,6 +378,37 @@ def handle_key_batch(
             processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
             process_state.sync(processes, adjust_scroll=False)
     return quit_requested, processes
+
+
+def handle_graph_pan_key(
+    key: str,
+    process_state: ProcessViewState,
+    history: MetricsHistory | None,
+    graph_frame: GraphFrame | None,
+) -> bool:
+    if key not in (",", ".", "r"):
+        return False
+    if process_state.mode != MODE_NORMAL or process_state.process_zoomed:
+        return False
+    if key == "r":
+        process_state.graph_view_offset_seconds = 0
+        return True
+    if history is None or graph_frame is None:
+        return False
+
+    samples = history.samples
+    if not samples:
+        return True
+
+    oldest = min(graph_frame_time(sample.timestamp) for sample in samples)
+    latest = graph_frame.display_time
+    max_offset = max(0, int((latest - oldest).total_seconds()))
+    current = min(max(0, process_state.graph_view_offset_seconds), max_offset)
+    if key == ",":
+        process_state.graph_view_offset_seconds = min(max_offset, current + GRAPH_PAN_SECONDS)
+    else:
+        process_state.graph_view_offset_seconds = max(0, current - GRAPH_PAN_SECONDS)
+    return True
 
 
 def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, int | None, bool, bool]:
@@ -473,6 +515,7 @@ def render_live_snapshot(
 ):
     display_time = display_time or datetime.now()
     frame = graph_frame or capture_graph_frame(history, display_time)
+    frame, graph_time_offset_seconds = display_graph_frame(history, process_state, frame)
     return render_snapshot(
         snapshot,
         history,
@@ -483,7 +526,42 @@ def render_live_snapshot(
         show_subsecond_time=interval < 1.0,
         history_samples=frame.history_samples,
         graph_time=frame.display_time,
+        graph_time_offset_seconds=graph_time_offset_seconds,
     )
+
+
+def display_graph_frame(
+    history: MetricsHistory,
+    process_state: ProcessViewState,
+    live_frame: GraphFrame,
+) -> tuple[GraphFrame, int]:
+    offset_seconds = clamped_graph_view_offset(
+        process_state.graph_view_offset_seconds,
+        history.samples,
+        live_frame.display_time,
+    )
+    if offset_seconds <= 0:
+        return live_frame, 0
+    end_time = live_frame.display_time - timedelta(seconds=offset_seconds)
+    return (
+        GraphFrame(
+            display_time=end_time,
+            history_samples=graph_samples_until(history.samples, end_time, history.max_samples),
+        ),
+        offset_seconds,
+    )
+
+
+def clamped_graph_view_offset(
+    offset_seconds: int,
+    samples: tuple[MetricSample, ...],
+    live_end_time: datetime,
+) -> int:
+    if offset_seconds <= 0 or not samples:
+        return 0
+    oldest = min(graph_frame_time(sample.timestamp) for sample in samples)
+    max_offset = max(0, int((live_end_time - oldest).total_seconds()))
+    return min(offset_seconds, max_offset)
 
 
 def capture_graph_frame(

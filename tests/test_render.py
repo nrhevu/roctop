@@ -327,6 +327,16 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(axis[99], "├")
         self.assertEqual(axis[114], "├")
 
+    def test_time_axis_offsets_markers_when_graph_is_panned(self) -> None:
+        axis = render.time_axis_line(130, offset_seconds=10).plain
+
+        self.assertEqual(axis.index("120s"), 70)
+        self.assertEqual(axis.index("60s"), 101)
+        self.assertEqual(axis.index("30s"), 116)
+        self.assertEqual(axis[74], "├")
+        self.assertEqual(axis[104], "├")
+        self.assertEqual(axis[119], "├")
+
     def test_time_axis_adds_long_window_markers(self) -> None:
         axis = render.time_axis_line(550).plain
         self.assertEqual(axis[3:10], " 1080s├")
@@ -669,6 +679,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
         self.assertIn("z: zoom", plain)
+        self.assertNotIn(",/. graph", plain)
+        self.assertNotIn("r: live", plain)
         self.assertIn("<0-1>: gpu", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("i: info", plain)
@@ -712,6 +724,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<0-3>", plain)
         self.assertIn("Filter processes by GPU id", plain)
         self.assertIn("Zoom process table", plain)
+        self.assertIn("Pan graph older/newer", plain)
+        self.assertIn("Reset graph to live", plain)
         self.assertIn("j/k or Up/Down: scroll", plain)
         self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("?/Esc: close", plain)

@@ -107,6 +107,8 @@ HELP_ENTRIES = (
     ("f", "Filter processes", "normal"),
     ("0-9", "Filter processes by GPU id", "normal"),
     ("z", "Zoom process table", "normal"),
+    (",/.", "Pan graph older/newer", "normal"),
+    ("r", "Reset graph to live", "normal"),
     ("Esc", "Clear filter or cancel active mode", "normal, menus"),
     ("t", "Toggle process tree", "normal"),
     ("p", "Jump to parent process", "tree"),
@@ -156,6 +158,7 @@ class ProcessViewState:
     filter_input: str = ""
     gpu_filter_index: int | None = None
     process_zoomed: bool = False
+    graph_view_offset_seconds: int = 0
 
     def sorted_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         rows = list(processes)
