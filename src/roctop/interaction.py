@@ -292,15 +292,15 @@ class ProcessViewState:
                 return KeyResult(changed=True)
             return KeyResult()
 
-        if key == KEY_ESC and self.process_zoomed:
-            self.process_zoomed = False
-            self.clear_status_message()
-            return KeyResult(changed=True)
-
         if key == KEY_ESC and self.has_filter():
             self.clear_filter()
             if not processes_synced:
                 self.sync(self.display_processes(source_processes))
+            return KeyResult(changed=True)
+
+        if key == KEY_ESC and self.process_zoomed:
+            self.process_zoomed = False
+            self.clear_status_message()
             return KeyResult(changed=True)
 
         if key == "q":

@@ -594,7 +594,7 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.filter_query, "1")
         self.assertIsNone(state.gpu_filter_index)
 
-    def test_z_toggles_process_zoom_and_escape_exits_before_clearing_filter(self) -> None:
+    def test_escape_clears_active_filter_before_exiting_process_zoom(self) -> None:
         processes = [proc(100, args="demo::trainer"), proc(101, args="demo::serve")]
         state = ProcessViewState(filter_query="serve", filter_input="serve", viewport_rows=3)
 
@@ -607,13 +607,30 @@ class InteractionTests(unittest.TestCase):
         result = state.handle_key("esc", processes)
 
         self.assertTrue(result.changed)
-        self.assertFalse(state.process_zoomed)
-        self.assertEqual(state.filter_query, "serve")
-        self.assertEqual(state.filter_input, "serve")
+        self.assertTrue(state.process_zoomed)
+        self.assertEqual(state.filter_query, "")
+        self.assertEqual(state.filter_input, "")
 
         result = state.handle_key("esc", processes)
 
         self.assertTrue(result.changed)
+        self.assertFalse(state.process_zoomed)
+
+    def test_escape_clears_gpu_filter_before_exiting_process_zoom(self) -> None:
+        processes = [proc(100, gpu_index=0), proc(101, gpu_index=1)]
+        state = ProcessViewState(gpu_filter_index=1, process_zoomed=True, viewport_rows=3)
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertTrue(state.process_zoomed)
+        self.assertIsNone(state.gpu_filter_index)
+        self.assertEqual([row.pid for row in state.display_processes(processes)], [100, 101])
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertFalse(state.process_zoomed)
         self.assertEqual(state.filter_query, "")
         self.assertEqual(state.filter_input, "")
 
