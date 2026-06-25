@@ -369,13 +369,14 @@ def handle_key_batch(
     return quit_requested, processes
 
 
-def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, int | None, bool]:
+def process_view_key(process_state: ProcessViewState) -> tuple[str, bool, str, int | None, bool, bool]:
     return (
         process_state.sort_field,
         process_state.sort_desc,
         process_state.filter_query.strip(),
         process_state.gpu_filter_index,
         process_state.tree_mode,
+        process_state.process_zoomed,
     )
 
 

@@ -745,6 +745,25 @@ class CliTests(unittest.TestCase):
         self.assertEqual([row.pid for row in processes], [2])
         self.assertEqual(state.selected_pid, 2)
 
+    def test_handle_key_batch_toggles_process_zoom_without_reordering_processes(self) -> None:
+        state = cli.ProcessViewState(selected_pid=1)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=1, args="rank-0"),
+                ProcessInfo(gpu_index=1, pid=2, args="rank-1"),
+            ],
+        )
+
+        view_before = cli.process_view_key(state)
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["z"])
+
+        self.assertFalse(quit_requested)
+        self.assertTrue(state.process_zoomed)
+        self.assertNotEqual(cli.process_view_key(state), view_before)
+        self.assertEqual([row.pid for row in processes], [1, 2])
+        self.assertEqual(state.selected_pid, 1)
+
     def test_handle_key_batch_recomputes_processes_after_tree_toggle(self) -> None:
         state = cli.ProcessViewState(selected_pid=42)
         snapshot = Snapshot(

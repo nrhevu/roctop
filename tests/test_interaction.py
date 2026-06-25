@@ -594,6 +594,48 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.filter_query, "1")
         self.assertIsNone(state.gpu_filter_index)
 
+    def test_z_toggles_process_zoom_and_escape_exits_before_clearing_filter(self) -> None:
+        processes = [proc(100, args="demo::trainer"), proc(101, args="demo::serve")]
+        state = ProcessViewState(filter_query="serve", filter_input="serve", viewport_rows=3)
+
+        result = state.handle_key("z", processes)
+
+        self.assertTrue(result.changed)
+        self.assertTrue(state.process_zoomed)
+        self.assertEqual(state.filter_query, "serve")
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertFalse(state.process_zoomed)
+        self.assertEqual(state.filter_query, "serve")
+        self.assertEqual(state.filter_input, "serve")
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.filter_query, "")
+        self.assertEqual(state.filter_input, "")
+
+    def test_z_remains_text_input_in_search_and_filter_modes(self) -> None:
+        processes = [proc(100, args="demo::rank-z")]
+        state = ProcessViewState(viewport_rows=3)
+
+        state.handle_key("/", processes)
+        state.handle_key("z", processes)
+
+        self.assertEqual(state.mode, MODE_SEARCH)
+        self.assertEqual(state.search_input, "z")
+        self.assertFalse(state.process_zoomed)
+
+        state.handle_key("esc", processes)
+        state.handle_key("f", processes)
+        state.handle_key("z", processes)
+
+        self.assertEqual(state.mode, MODE_FILTER)
+        self.assertEqual(state.filter_query, "z")
+        self.assertFalse(state.process_zoomed)
+
     def test_search_next_and_previous_wrap_in_sorted_order(self) -> None:
         processes = [
             proc(1, cpu_percent=10.0, args="demo::worker low"),

@@ -53,6 +53,7 @@ DRACULA_SELECTION_FG = DRACULA_FG
 SORT_MENU_SELECTION_BG = DRACULA_CYAN
 SORT_MENU_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
+PROCESS_TABLE_CHROME_ROWS = 5
 # Braille cells have two horizontal dot columns. Packing two one-second
 # buckets per terminal cell keeps the dotted graph visually continuous.
 GRAPH_COLUMNS_PER_CELL = 2
@@ -162,7 +163,6 @@ def render_snapshot(
     graph_time: datetime | None = None,
 ) -> Group | PopupOverlay:
     with profile_span("render"):
-        gpu_table = render_gpu_table(snapshot.gpus)
         process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state)
         process_table = render_process_table(
             display_processes if display_processes is not None else snapshot.processes,
@@ -172,21 +172,24 @@ def render_snapshot(
             processes_sorted=display_processes is not None,
             process_ancestors=snapshot.process_ancestors,
         )
-        header = render_header(
-            snapshot,
-            process_state=process_state,
-            process_count=len(snapshot.processes),
-            display_time=display_time,
-            show_subsecond_time=show_subsecond_time,
-            terminal_width=terminal_width,
-        )
-        parts = [header, gpu_table]
-        if history is not None:
-            parts.append(render_metrics_graphs(history, end_time=graph_time or display_time, samples=history_samples))
-        parts.append(process_table)
-        visible_warnings = ui_warnings(snapshot.warnings)
-        if visible_warnings:
-            parts.append(render_warnings(visible_warnings))
+        if process_state is not None and process_state.process_zoomed:
+            parts = [process_table]
+        else:
+            header = render_header(
+                snapshot,
+                process_state=process_state,
+                process_count=len(snapshot.processes),
+                display_time=display_time,
+                show_subsecond_time=show_subsecond_time,
+                terminal_width=terminal_width,
+            )
+            parts = [header, render_gpu_table(snapshot.gpus)]
+            if history is not None:
+                parts.append(render_metrics_graphs(history, end_time=graph_time or display_time, samples=history_samples))
+            parts.append(process_table)
+            visible_warnings = ui_warnings(snapshot.warnings)
+            if visible_warnings:
+                parts.append(render_warnings(visible_warnings))
         base = Group(*parts)
         if process_state is not None and process_state.mode == MODE_HELP:
             return HelpOverlay(base, process_state, terminal_height, terminal_width, snapshot.gpus)
@@ -208,6 +211,9 @@ def estimate_process_view_rows(
 ) -> int | None:
     if terminal_height is None:
         return None
+    if process_state is not None and process_state.process_zoomed:
+        used_rows = PROCESS_TABLE_CHROME_ROWS + process_inline_menu_rows(process_state)
+        return max(1, terminal_height - used_rows)
     used_rows = 4
     used_rows += len(snapshot.gpus) + 4
     if history is not None:
@@ -218,6 +224,14 @@ def estimate_process_view_rows(
     if visible_warnings:
         used_rows += min(len(visible_warnings), 6) + 4
     return max(1, terminal_height - used_rows - 5)
+
+
+def process_inline_menu_rows(process_state: ProcessViewState | None) -> int:
+    if process_state is None:
+        return 0
+    if process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM, MODE_SEARCH, MODE_FILTER):
+        return 1
+    return 0
 
 
 def render_header(
@@ -286,6 +300,7 @@ def append_process_help(
     append_keybinding(details, "t", "tree", separator=separator)
     append_keybinding(details, "/", "search", separator=separator)
     append_keybinding(details, "f", "filter", separator=separator)
+    append_keybinding(details, "z", "zoom", separator=separator)
     append_keybinding(details, "i", "info", separator=separator)
     append_keybinding(details, "x", "kill", separator=separator)
     append_keybinding(details, "?", "help", separator=separator)

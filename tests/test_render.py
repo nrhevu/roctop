@@ -652,8 +652,8 @@ class RenderTests(unittest.TestCase):
             ],
         )
         state = ProcessViewState(selected_pid=456, viewport_rows=4)
-        console = Console(width=180, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
-        console.print(render_snapshot(snapshot, process_state=state, terminal_height=40))
+        console = Console(width=180, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=40, terminal_width=180))
         plain = console.export_text(clear=False)
         styled = console.export_text(styles=True)
         self.assertNotIn("Processes:", plain)
@@ -668,6 +668,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("t: tree", plain)
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
+        self.assertIn("z: zoom", plain)
         self.assertIn("<0-1>: gpu", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("i: info", plain)
@@ -710,6 +711,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Open help / close help", plain)
         self.assertIn("<0-3>", plain)
         self.assertIn("Filter processes by GPU id", plain)
+        self.assertIn("Zoom process table", plain)
         self.assertIn("j/k or Up/Down: scroll", plain)
         self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("?/Esc: close", plain)
@@ -957,6 +959,69 @@ class RenderTests(unittest.TestCase):
         self.assertIn("GPU: 1", title_line)
         self.assertIn("python serve.py", plain)
         self.assertNotIn("python train.py", plain)
+
+    def test_process_zoom_renders_only_process_table_with_full_height(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            node_name="node-a",
+            gpus=[
+                GpuInfo(index=0, memory_total_bytes=4 * 1024 * 1024 * 1024, utilization_percent=42),
+            ],
+            processes=[
+                ProcessInfo(gpu_index=index % 2, pid=100 + index, user="demo", args=f"python rank-{index}.py")
+                for index in range(10)
+            ],
+            warnings=["demo warning"],
+        )
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=37.3,
+                avg_mem_percent=77.2,
+                avg_gpu_percent=33.2,
+                avg_gpu_mem_percent=54.6,
+            )
+        )
+        state = ProcessViewState(selected_pid=104, process_zoomed=True, viewport_rows=8)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, history, state, terminal_height=12, terminal_width=140))
+        plain = console.export_text(clear=False)
+
+        self.assertLessEqual(len(plain.splitlines()), 12)
+        self.assertNotIn("roctop @ node-a", plain)
+        self.assertNotIn("GUID", plain)
+        self.assertNotIn("Avg %CPU", plain)
+        self.assertNotIn("Warnings", plain)
+        self.assertIn("Processes  ", plain)
+        self.assertIn("python rank-4.p", plain)
+
+    def test_process_zoom_keeps_inline_filter_menu_and_filters_rows(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0), GpuInfo(index=1)],
+            processes=[
+                ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
+                ProcessInfo(gpu_index=1, pid=456, user="demo", args="python serve.py"),
+            ],
+        )
+        state = ProcessViewState(
+            selected_pid=123,
+            process_zoomed=True,
+            mode=MODE_FILTER,
+            filter_input="train",
+            filter_query="train",
+            viewport_rows=4,
+        )
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=8, terminal_width=140))
+        plain = console.export_text(clear=False)
+
+        self.assertLessEqual(len(plain.splitlines()), 8)
+        self.assertIn("Filter: train", plain)
+        self.assertIn("python train.py", plain)
+        self.assertNotIn("python serve.py", plain)
+        self.assertNotIn("GUID", plain)
 
     def test_tree_mode_renders_connectors_and_selected_row(self) -> None:
         processes = [

@@ -106,6 +106,7 @@ HELP_ENTRIES = (
     ("n/N", "Next/previous search match", "normal"),
     ("f", "Filter processes", "normal"),
     ("0-9", "Filter processes by GPU id", "normal"),
+    ("z", "Zoom process table", "normal"),
     ("Esc", "Clear filter or cancel active mode", "normal, menus"),
     ("t", "Toggle process tree", "normal"),
     ("p", "Jump to parent process", "tree"),
@@ -154,6 +155,7 @@ class ProcessViewState:
     filter_query: str = ""
     filter_input: str = ""
     gpu_filter_index: int | None = None
+    process_zoomed: bool = False
 
     def sorted_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
         rows = list(processes)
@@ -275,12 +277,22 @@ class ProcessViewState:
         if self.mode == MODE_PROCESS_INFO:
             return self.handle_process_info_key(key)
 
+        if key == "z":
+            self.process_zoomed = not self.process_zoomed
+            self.clear_status_message()
+            return KeyResult(changed=True)
+
         if is_gpu_filter_key(key):
             if self.apply_gpu_filter_key(key, source_processes, gpu_indices):
                 if not processes_synced:
                     self.sync(self.display_processes(source_processes))
                 return KeyResult(changed=True)
             return KeyResult()
+
+        if key == KEY_ESC and self.process_zoomed:
+            self.process_zoomed = False
+            self.clear_status_message()
+            return KeyResult(changed=True)
 
         if key == KEY_ESC and self.has_filter():
             self.clear_filter()
