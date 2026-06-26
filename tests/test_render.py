@@ -373,6 +373,16 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(axis[104], "├")
         self.assertEqual(axis[119], "├")
 
+    def test_time_axis_keeps_marker_label_at_left_edge(self) -> None:
+        width = 128
+        offset_seconds = render.GRAPH_HISTORY_SECONDS - (
+            width - 1 - len("1080s")
+        ) * render.GRAPH_COLUMNS_PER_CELL
+
+        axis = render.time_axis_line(width, offset_seconds=offset_seconds).plain
+
+        self.assertEqual(axis[:6], "1080s├")
+
     def test_time_axis_adds_long_window_markers(self) -> None:
         axis = render.time_axis_line(550).plain
         self.assertNotIn("─", axis[:3])
@@ -427,6 +437,26 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(axis_lines), 1)
         self.assertEqual(len(bottom_label_lines), 1)
         self.assertLess(axis_lines[0], bottom_label_lines[0])
+
+    def test_metric_graph_pair_keeps_left_edge_time_label_in_both_columns(self) -> None:
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=3.0,
+                avg_mem_percent=8.0,
+                avg_gpu_percent=4.0,
+                avg_gpu_mem_percent=55.0,
+            )
+        )
+        width = 128
+        offset_seconds = render.GRAPH_HISTORY_SECONDS - (
+            width - 1 - len("1080s")
+        ) * render.GRAPH_COLUMNS_PER_CELL
+        console = Console(width=264, record=True, file=StringIO())
+        console.print(render_metrics_graphs(history, time_offset_seconds=offset_seconds))
+
+        self.assertEqual(console.export_text().count("1080s"), 2)
 
     def test_metric_graph_slides_long_history_without_compressing_window(self) -> None:
         total_seconds = render.GRAPH_HISTORY_SECONDS * 2

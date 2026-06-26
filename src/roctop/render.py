@@ -762,9 +762,10 @@ def time_axis_line(width: int, offset_seconds: int = 0) -> Text:
         marker = width - 1 - marker_seconds // GRAPH_COLUMNS_PER_CELL
         start = marker - len(label)
         space = start - 1
-        if space < 0 or start + len(label) > width:
+        if start < 0 or start + len(label) > width:
             continue
-        chars[space] = " "
+        if space >= 0:
+            chars[space] = " "
         chars[start:marker] = list(label)
         chars[marker] = "├"
     return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
