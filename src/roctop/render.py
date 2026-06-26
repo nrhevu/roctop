@@ -61,7 +61,15 @@ PROCESS_TABLE_MIN_COMMAND_WIDTH = 12
 # Braille cells have two horizontal dot columns. Packing two one-second
 # buckets per terminal cell keeps the dotted graph visually continuous.
 GRAPH_COLUMNS_PER_CELL = 2
-TIME_AXIS_MARKERS_SECONDS = (1080, 720, 360, 240, 120, 60, 30)
+GRAPH_HISTORY_SECONDS = 1080
+GRAPH_WINDOW_DATA_PADDING_CELLS = 0
+TIME_AXIS_MARKERS_SECONDS = tuple(
+    dict.fromkeys(
+        seconds
+        for seconds in (GRAPH_HISTORY_SECONDS, 720, 360, 240, 120, 60, 30)
+        if seconds <= GRAPH_HISTORY_SECONDS
+    )
+)
 BRAILLE_DOTS_BY_COLUMN = (
     (0x01, 0x02, 0x04, 0x40),
     (0x08, 0x10, 0x20, 0x80),
@@ -651,12 +659,14 @@ def render_metrics_graphs(
     time_offset_seconds: int = 0,
 ) -> Table:
     metric_samples = tuple(samples) if samples is not None else history.samples
+    live_samples = history.samples
     table = Table(box=box.SQUARE, expand=True, show_header=False, padding=(0, 1))
     table.add_column(ratio=1)
     table.add_column(ratio=1)
     table.add_row(
         MetricGraphPair(
             samples=metric_samples,
+            label_samples=live_samples,
             end_time=end_time,
             top_metric_name="avg_cpu_percent",
             top_label="Avg %CPU",
@@ -668,6 +678,7 @@ def render_metrics_graphs(
         ),
         MetricGraphPair(
             samples=metric_samples,
+            label_samples=live_samples,
             end_time=end_time,
             top_metric_name="avg_gpu_percent",
             top_label="Avg %GPU",
@@ -684,6 +695,7 @@ def render_metrics_graphs(
 @dataclass(frozen=True, slots=True)
 class MetricGraphPair:
     samples: Sequence[MetricSample]
+    label_samples: Sequence[MetricSample]
     end_time: datetime | None
     top_metric_name: str
     top_label: str
@@ -699,9 +711,12 @@ class MetricGraphPair:
         graph_columns = width * GRAPH_COLUMNS_PER_CELL
         top_values = metric_values_by_time(self.samples, self.top_metric_name, graph_columns, self.end_time)
         bottom_values = metric_values_by_time(self.samples, self.bottom_metric_name, graph_columns, self.end_time)
+        graph_start = graph_data_start_index(width, self.time_offset_seconds)
+        top_values = crop_metric_values_before_graph_window(top_values, graph_start)
+        bottom_values = crop_metric_values_before_graph_window(bottom_values, graph_start)
         yield metric_label(
             self.top_label,
-            latest_metric_sample_value(self.samples, self.top_metric_name, self.end_time),
+            latest_metric_sample_value(self.label_samples, self.top_metric_name),
             self.top_style,
         )
         yield from metric_graph_lines(top_values, width=width, height=self.height, style=self.top_style, trim_empty=False)
@@ -718,7 +733,7 @@ class MetricGraphPair:
         )
         yield metric_label(
             self.bottom_label,
-            latest_metric_sample_value(self.samples, self.bottom_metric_name, self.end_time),
+            latest_metric_sample_value(self.label_samples, self.bottom_metric_name),
             self.bottom_style,
         )
 
@@ -736,7 +751,9 @@ def metric_label(label: str, value: float | None, style: str) -> Text:
 def time_axis_line(width: int, offset_seconds: int = 0) -> Text:
     width = max(1, width)
     offset_seconds = max(0, offset_seconds)
-    chars = ["─"] * width
+    chars = [" "] * width
+    axis_start = graph_window_start_index(width, offset_seconds)
+    chars[axis_start:] = ["─"] * (width - axis_start)
     for seconds in TIME_AXIS_MARKERS_SECONDS:
         marker_seconds = seconds - offset_seconds
         if marker_seconds <= 0:
@@ -751,6 +768,26 @@ def time_axis_line(width: int, offset_seconds: int = 0) -> Text:
         chars[start:marker] = list(label)
         chars[marker] = "├"
     return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
+
+
+def graph_window_start_index(width: int, offset_seconds: int = 0) -> int:
+    width = max(1, width)
+    offset_seconds = max(0, offset_seconds)
+    start = width - 1 - max(0, GRAPH_HISTORY_SECONDS - offset_seconds) // GRAPH_COLUMNS_PER_CELL
+    return max(0, min(width - 1, start))
+
+
+def graph_data_start_index(width: int, offset_seconds: int = 0) -> int:
+    width = max(1, width)
+    return min(width - 1, graph_window_start_index(width, offset_seconds) + GRAPH_WINDOW_DATA_PADDING_CELLS)
+
+
+def crop_metric_values_before_graph_window(values: Sequence[float | None], window_start: int) -> list[float | None]:
+    cropped = list(values)
+    graph_start_column = max(0, window_start) * GRAPH_COLUMNS_PER_CELL
+    for index in range(min(graph_start_column, len(cropped))):
+        cropped[index] = None
+    return cropped
 
 
 def latest_metric_sample_value(

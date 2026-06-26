@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -34,12 +35,14 @@ from .interaction import (
 )
 from .models import ProcessInfo, Snapshot
 from .profiling import profile_span
-from .render import render_snapshot
+from .render import GRAPH_COLUMNS_PER_CELL, GRAPH_HISTORY_SECONDS, render_snapshot
 
 
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
 GRAPH_FRAME_SECONDS = 1.0
+GRAPH_HISTORY_BUCKETS = GRAPH_HISTORY_SECONDS + 1
+GRAPH_HISTORY_LABEL_GUTTER_SECONDS = (len(f"{GRAPH_HISTORY_SECONDS}s") + 1) * GRAPH_COLUMNS_PER_CELL
 GRAPH_PAN_SECONDS = 10
 GRAPH_METRIC_FIELDS = (
     "avg_cpu_percent",
@@ -174,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_live(console: Console, interval: float) -> int:
-    history = MetricsHistory(max_samples=1081)
+    history = MetricsHistory(max_samples=graph_history_sample_limit(interval))
     process_state = ProcessViewState()
     history.prime_cpu()
     snapshot = collect_snapshot_retry(interval)
@@ -285,6 +288,7 @@ def poll_live_until_quit(
             keys,
             history=history,
             graph_frame=graph_frame,
+            terminal_width=console_dimensions(console)[1],
         )
         rendered_size = console_dimensions(console)
         live.update(
@@ -331,7 +335,7 @@ def poll_input_until_refresh(
         keys = keyboard.read_keys(timeout=min(KEY_POLL_SECONDS, remaining))
         if not keys:
             continue
-        quit_requested, processes = handle_key_batch(snapshot, process_state, keys)
+        quit_requested, processes = handle_key_batch(snapshot, process_state, keys, terminal_width=rendered_size[1])
         rendered_size = console_dimensions(console)
         live.update(
             render_snapshot(snapshot, history, process_state, *rendered_size, display_processes=processes),
@@ -347,6 +351,7 @@ def handle_key_batch(
     keys: list[str],
     history: MetricsHistory | None = None,
     graph_frame: GraphFrame | None = None,
+    terminal_width: int | None = None,
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
     gpu_indices = snapshot_gpu_indices(snapshot)
@@ -362,7 +367,7 @@ def handle_key_batch(
             if key == "i" and process_state.mode == MODE_NORMAL:
                 open_selected_process_info(snapshot, process_state, processes)
                 continue
-            if handle_graph_pan_key(key, process_state, history, graph_frame):
+            if handle_graph_pan_key(key, process_state, history, graph_frame, terminal_width):
                 continue
             view_before = process_view_key(process_state)
             result = process_state.handle_key(
@@ -385,6 +390,7 @@ def handle_graph_pan_key(
     process_state: ProcessViewState,
     history: MetricsHistory | None,
     graph_frame: GraphFrame | None,
+    terminal_width: int | None = None,
 ) -> bool:
     if key not in (",", ".", "r"):
         return False
@@ -400,9 +406,11 @@ def handle_graph_pan_key(
     if not samples:
         return True
 
-    oldest = min(graph_frame_time(sample.timestamp) for sample in samples)
-    latest = graph_frame.display_time
-    max_offset = max(0, int((latest - oldest).total_seconds()))
+    max_offset = graph_view_max_offset_seconds(
+        samples,
+        graph_frame.display_time,
+        visible_seconds=graph_view_visible_seconds(terminal_width),
+    )
     current = min(max(0, process_state.graph_view_offset_seconds), max_offset)
     if key == ",":
         process_state.graph_view_offset_seconds = min(max_offset, current + GRAPH_PAN_SECONDS)
@@ -515,12 +523,19 @@ def render_live_snapshot(
 ):
     display_time = display_time or datetime.now()
     frame = graph_frame or capture_graph_frame(history, display_time)
-    frame, graph_time_offset_seconds = display_graph_frame(history, process_state, frame)
+    terminal_height, terminal_width = console_dimensions(console)
+    frame, graph_time_offset_seconds = display_graph_frame(
+        history,
+        process_state,
+        frame,
+        terminal_width=terminal_width,
+    )
     return render_snapshot(
         snapshot,
         history,
         process_state,
-        *console_dimensions(console),
+        terminal_height,
+        terminal_width,
         display_processes=display_processes,
         display_time=display_time,
         show_subsecond_time=interval < 1.0,
@@ -534,19 +549,22 @@ def display_graph_frame(
     history: MetricsHistory,
     process_state: ProcessViewState,
     live_frame: GraphFrame,
+    terminal_width: int | None = None,
 ) -> tuple[GraphFrame, int]:
     offset_seconds = clamped_graph_view_offset(
         process_state.graph_view_offset_seconds,
         history.samples,
         live_frame.display_time,
+        visible_seconds=graph_view_visible_seconds(terminal_width),
     )
+    process_state.graph_view_offset_seconds = offset_seconds
     if offset_seconds <= 0:
         return live_frame, 0
     end_time = live_frame.display_time - timedelta(seconds=offset_seconds)
     return (
         GraphFrame(
             display_time=end_time,
-            history_samples=graph_samples_until(history.samples, end_time, history.max_samples),
+            history_samples=graph_samples_until(history.samples, end_time, GRAPH_HISTORY_BUCKETS),
         ),
         offset_seconds,
     )
@@ -556,12 +574,40 @@ def clamped_graph_view_offset(
     offset_seconds: int,
     samples: tuple[MetricSample, ...],
     live_end_time: datetime,
+    visible_seconds: int | None = None,
 ) -> int:
-    if offset_seconds <= 0 or not samples:
+    if offset_seconds <= 0:
         return 0
-    oldest = min(graph_frame_time(sample.timestamp) for sample in samples)
-    max_offset = max(0, int((live_end_time - oldest).total_seconds()))
+    max_offset = graph_view_max_offset_seconds(samples, live_end_time, visible_seconds)
     return min(offset_seconds, max_offset)
+
+
+def graph_view_max_offset_seconds(
+    samples: tuple[MetricSample, ...],
+    live_end_time: datetime,
+    visible_seconds: int | None = None,
+) -> int:
+    if not samples:
+        return 0
+    if visible_seconds is None:
+        return GRAPH_HISTORY_SECONDS
+    visible_span = max(0, visible_seconds - 1)
+    return min(
+        GRAPH_HISTORY_SECONDS,
+        max(0, GRAPH_HISTORY_SECONDS - visible_span + GRAPH_HISTORY_LABEL_GUTTER_SECONDS),
+    )
+
+
+def graph_view_visible_seconds(terminal_width: int | None) -> int | None:
+    if terminal_width is None:
+        return None
+    graph_width = max(12, (max(1, terminal_width) - 2) // 2 - 2)
+    return min(GRAPH_HISTORY_BUCKETS, graph_width * GRAPH_COLUMNS_PER_CELL)
+
+
+def graph_history_sample_limit(interval: float) -> int:
+    interval = max(float(interval), 1e-9)
+    return max(1, math.ceil(GRAPH_HISTORY_SECONDS / interval) + 1)
 
 
 def capture_graph_frame(
@@ -575,7 +621,7 @@ def capture_graph_frame(
         display_second = graph_frame_time(frame_time)
     return GraphFrame(
         display_time=display_second,
-        history_samples=graph_samples_until(samples, display_second, history.max_samples),
+        history_samples=graph_samples_until(samples, display_second, GRAPH_HISTORY_BUCKETS),
     )
 
 
@@ -594,7 +640,7 @@ def advance_graph_frame(
     previous_values = graph_sample_values(previous_frame.history_samples[-1]) if previous_frame.history_samples else None
     sample = graph_sample_for_second(raw_samples, next_second, previous_values)
     samples = (*previous_frame.history_samples, sample)
-    return GraphFrame(display_time=next_second, history_samples=samples[-history.max_samples :])
+    return GraphFrame(display_time=next_second, history_samples=samples[-GRAPH_HISTORY_BUCKETS:])
 
 
 def graph_samples_until(

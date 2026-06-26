@@ -38,6 +38,13 @@ def has_braille_dots(text: str) -> bool:
     return any("\u2801" <= char <= "\u28ff" for char in text)
 
 
+def first_braille_index(text: str) -> int:
+    for index, char in enumerate(text):
+        if "\u2801" <= char <= "\u28ff":
+            return index
+    return -1
+
+
 def synthetic_long_processes(count: int) -> list[ProcessInfo]:
     command = (
         "demo_worker --model-path /demo/models/example-checkpoint "
@@ -169,11 +176,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Avg %GPU: 33.2%", output)
         self.assertIn("Avg %MEM: 77.2%", output)
         self.assertIn("Avg %GPU MEM: 54.6%", output)
+        marker = "240s"
+        self.assertIn(marker, output)
         self.assertIn("120s", output)
         self.assertIn("60s", output)
-        self.assertIn("30s", output)
-        self.assertLess(output.index("Avg %CPU: 37.3%"), output.index("120s"))
-        self.assertLess(output.index("120s"), output.index("Avg %MEM: 77.2%"))
+        self.assertLess(output.index("Avg %CPU: 37.3%"), output.index(marker))
+        self.assertLess(output.index(marker), output.index("Avg %MEM: 77.2%"))
         self.assertLess(output.index("Avg %GPU: 33.2%"), output.index("Avg %GPU MEM: 54.6%"))
         self.assertLess(output.index("%Utilization"), output.index("Avg %CPU"))
         self.assertLess(output.index("Avg %CPU"), output.index("PID"))
@@ -367,6 +375,7 @@ class RenderTests(unittest.TestCase):
 
     def test_time_axis_adds_long_window_markers(self) -> None:
         axis = render.time_axis_line(550).plain
+        self.assertNotIn("─", axis[:3])
         self.assertEqual(axis[3:10], " 1080s├")
         self.assertEqual(axis[184:190], " 720s├")
         self.assertEqual(axis[364:370], " 360s├")
@@ -411,7 +420,7 @@ class RenderTests(unittest.TestCase):
         console = Console(width=300, record=True, file=StringIO())
         console.print(render_metrics_graphs(history))
         lines = console.export_text().splitlines()
-        axis_lines = [index for index, line in enumerate(lines) if "120s" in line]
+        axis_lines = [index for index, line in enumerate(lines) if "240s" in line]
         bottom_label_lines = [
             index for index, line in enumerate(lines) if "Avg %MEM:" in line and "Avg %GPU MEM:" in line
         ]
@@ -420,9 +429,10 @@ class RenderTests(unittest.TestCase):
         self.assertLess(axis_lines[0], bottom_label_lines[0])
 
     def test_metric_graph_slides_long_history_without_compressing_window(self) -> None:
-        history = MetricsHistory(max_samples=1081)
+        total_seconds = render.GRAPH_HISTORY_SECONDS * 2
+        history = MetricsHistory(max_samples=total_seconds + 1)
         start_time = datetime(2026, 6, 22, 12, 0, 0)
-        for second in range(1081):
+        for second in range(total_seconds + 1):
             history.append_sample(
                 MetricSample(
                     timestamp=start_time + timedelta(seconds=second),
@@ -437,15 +447,50 @@ class RenderTests(unittest.TestCase):
         console.print(
             render_metrics_graphs(
                 history,
-                end_time=datetime(2026, 6, 22, 12, 18, 0),
+                end_time=start_time + timedelta(seconds=total_seconds),
                 samples=history.samples,
             )
         )
 
         output = console.export_text()
-        self.assertNotIn("1080s", output)
+        self.assertIn("240s", output)
         self.assertIn("120s", output)
         self.assertIn("Avg %GPU: 30.0%", output)
+
+    def test_metric_graph_does_not_draw_data_before_history_limit_marker(self) -> None:
+        total_seconds = render.GRAPH_HISTORY_SECONDS * 2
+        history = MetricsHistory(max_samples=total_seconds + 1)
+        start_time = datetime(2026, 6, 22, 12, 0, 0)
+        for second in range(total_seconds + 1):
+            history.append_sample(
+                MetricSample(
+                    timestamp=start_time + timedelta(seconds=second),
+                    avg_cpu_percent=None,
+                    avg_mem_percent=None,
+                    avg_gpu_percent=50.0,
+                    avg_gpu_mem_percent=50.0,
+                )
+            )
+
+        console = Console(width=300, record=True, file=StringIO())
+        console.print(
+            render_metrics_graphs(
+                history,
+                end_time=start_time + timedelta(seconds=total_seconds),
+                samples=history.samples,
+            )
+        )
+        lines = console.export_text().splitlines()
+        gpu_axis = next(line for line in lines if "240s" in line)
+        marker_index = gpu_axis.index("240s")
+        gpu_graph_lines = [
+            line
+            for line in lines
+            if has_braille_dots(line) and "Avg %" not in line
+        ]
+        first_dot = min(index for line in gpu_graph_lines if (index := first_braille_index(line)) >= 0)
+
+        self.assertGreaterEqual(first_dot, marker_index + render.GRAPH_WINDOW_DATA_PADDING_CELLS)
 
     def test_metric_graph_bottom_half_sticks_to_time_axis(self) -> None:
         history = MetricsHistory(max_samples=120)

@@ -4,7 +4,7 @@ import threading
 import time
 import unittest
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 from unittest.mock import patch
 
@@ -345,6 +345,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(cli.graph_frame_interval(2.0), 1.0)
         self.assertEqual(cli.graph_frame_interval(3.0), 1.0)
 
+    def test_graph_history_sample_limit_tracks_window_seconds(self) -> None:
+        self.assertEqual(cli.graph_history_sample_limit(1.0), cli.GRAPH_HISTORY_BUCKETS)
+        self.assertEqual(cli.graph_history_sample_limit(2.0), cli.GRAPH_HISTORY_SECONDS // 2 + 1)
+        self.assertEqual(cli.graph_history_sample_limit(0.5), cli.GRAPH_HISTORY_SECONDS * 2 + 1)
+
     def test_graph_frame_time_uses_whole_second(self) -> None:
         self.assertEqual(
             cli.graph_frame_time(datetime(2026, 6, 22, 12, 0, 1, 500000)),
@@ -476,6 +481,83 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(buckets[datetime(2026, 6, 22, 12, 0, 1)].avg_cpu_percent, 90.0)
         self.assertEqual(buckets[datetime(2026, 6, 22, 12, 0, 2)].avg_cpu_percent, 50.0)
+
+    def test_capture_graph_frame_uses_fixed_graph_second_window(self) -> None:
+        history = cli.MetricsHistory(max_samples=2000)
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        extra_seconds = 120
+        end_second = cli.GRAPH_HISTORY_SECONDS + extra_seconds
+        for second in range(end_second + 1):
+            history.append_sample(
+                cli.MetricSample(
+                    timestamp=start + timedelta(seconds=second),
+                    avg_cpu_percent=float(second),
+                    avg_mem_percent=None,
+                    avg_gpu_percent=None,
+                    avg_gpu_mem_percent=None,
+                )
+            )
+
+        frame = cli.capture_graph_frame(history, start + timedelta(seconds=end_second))
+
+        self.assertEqual(len(frame.history_samples), cli.GRAPH_HISTORY_BUCKETS)
+        self.assertEqual(frame.history_samples[0].timestamp, start + timedelta(seconds=extra_seconds))
+        self.assertEqual(frame.history_samples[-1].timestamp, start + timedelta(seconds=end_second))
+
+    def test_graph_pan_clamps_to_graph_second_left_bound_for_viewport(self) -> None:
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        end_second = cli.GRAPH_HISTORY_SECONDS + 120
+        samples = tuple(
+            cli.MetricSample(
+                timestamp=start + timedelta(seconds=second),
+                avg_cpu_percent=float(second),
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            )
+            for second in range(end_second + 1)
+        )
+        live_end = start + timedelta(seconds=end_second)
+        visible_seconds = cli.GRAPH_HISTORY_SECONDS // 2 + 1
+        expected_offset = (
+            cli.GRAPH_HISTORY_SECONDS - (visible_seconds - 1) + cli.GRAPH_HISTORY_LABEL_GUTTER_SECONDS
+        )
+
+        self.assertEqual(cli.graph_view_max_offset_seconds(samples, live_end), cli.GRAPH_HISTORY_SECONDS)
+        self.assertEqual(
+            cli.graph_view_max_offset_seconds(samples, live_end, visible_seconds=visible_seconds),
+            expected_offset,
+        )
+        self.assertEqual(
+            cli.clamped_graph_view_offset(2000, samples, live_end, visible_seconds=visible_seconds),
+            expected_offset,
+        )
+        self.assertGreater(
+            cli.graph_view_max_offset_seconds(
+                samples,
+                live_end,
+                visible_seconds=cli.GRAPH_HISTORY_BUCKETS + cli.GRAPH_HISTORY_LABEL_GUTTER_SECONDS // 2,
+            ),
+            0,
+        )
+
+    def test_graph_pan_uses_window_limit_even_before_history_fills(self) -> None:
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        samples = (
+            cli.MetricSample(
+                timestamp=start,
+                avg_cpu_percent=1.0,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            ),
+        )
+
+        self.assertEqual(cli.graph_view_max_offset_seconds(samples, start), cli.GRAPH_HISTORY_SECONDS)
+        self.assertGreater(
+            cli.graph_view_max_offset_seconds(samples, start, visible_seconds=20),
+            0,
+        )
 
     def test_live_loop_redraws_graph_once_per_second_when_table_interval_is_slower(self) -> None:
         class FakeConsole:
@@ -657,21 +739,20 @@ class CliTests(unittest.TestCase):
         )
         output = console.export_text()
 
-        self.assertIn("Avg %CPU: 10.0%", output)
-        self.assertIn("Avg %GPU: 30.0%", output)
-        self.assertNotIn("90.0%", output)
-        self.assertNotIn("70.0%", output)
+        self.assertIn("Avg %CPU: 90.0%", output)
+        self.assertIn("Avg %GPU: 70.0%", output)
 
     def test_live_render_snapshot_uses_graph_view_offset_from_live(self) -> None:
         class FakeConsole:
             @property
             def size(self) -> FakeConsoleSize:
-                return FakeConsoleSize(height=35, width=160)
+                return FakeConsoleSize(height=35, width=80)
 
         history = cli.MetricsHistory(max_samples=120)
+        start = datetime(2026, 6, 22, 12, 0, 0)
         history.append_sample(
             cli.MetricSample(
-                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                timestamp=start,
                 avg_cpu_percent=10.0,
                 avg_mem_percent=20.0,
                 avg_gpu_percent=30.0,
@@ -680,20 +761,20 @@ class CliTests(unittest.TestCase):
         )
         history.append_sample(
             cli.MetricSample(
-                timestamp=datetime(2026, 6, 22, 12, 0, 20),
+                timestamp=start + timedelta(seconds=100),
                 avg_cpu_percent=90.0,
                 avg_mem_percent=80.0,
                 avg_gpu_percent=70.0,
                 avg_gpu_mem_percent=60.0,
             )
         )
-        graph_frame = cli.capture_graph_frame(history, datetime(2026, 6, 22, 12, 0, 20))
+        graph_frame = cli.capture_graph_frame(history, start + timedelta(seconds=100))
         state = cli.ProcessViewState(graph_view_offset_seconds=20)
 
-        console = Console(width=160, record=True, file=StringIO())
+        console = Console(width=80, record=True, file=StringIO())
         console.print(
             cli.render_live_snapshot(
-                Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 20)),
+                Snapshot(timestamp=start + timedelta(seconds=100)),
                 history,
                 state,
                 FakeConsole(),
@@ -702,10 +783,45 @@ class CliTests(unittest.TestCase):
         )
         output = console.export_text()
 
-        self.assertIn("Avg %CPU: 10.0%", output)
-        self.assertIn("Avg %GPU: 30.0%", output)
-        self.assertNotIn("90.0%", output)
-        self.assertNotIn("70.0%", output)
+        self.assertIn("Avg %CPU: 90.0%", output)
+        self.assertIn("Avg %GPU: 70.0%", output)
+
+    def test_live_render_snapshot_keeps_live_labels_when_panned_before_history(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=35, width=80)
+
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        history = cli.MetricsHistory(max_samples=120)
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=start,
+                avg_cpu_percent=12.0,
+                avg_mem_percent=34.0,
+                avg_gpu_percent=56.0,
+                avg_gpu_mem_percent=78.0,
+            )
+        )
+        graph_frame = cli.capture_graph_frame(history, start)
+        state = cli.ProcessViewState(graph_view_offset_seconds=120)
+
+        console = Console(width=80, record=True, file=StringIO())
+        console.print(
+            cli.render_live_snapshot(
+                Snapshot(timestamp=start),
+                history,
+                state,
+                FakeConsole(),
+                graph_frame=graph_frame,
+            )
+        )
+        output = console.export_text()
+
+        self.assertIn("Avg %CPU: 12.0%", output)
+        self.assertIn("Avg %GPU: 56.0%", output)
+        self.assertNotIn("Avg %CPU: N/A", output)
+        self.assertNotIn("Avg %GPU: N/A", output)
 
     def test_display_graph_frame_keeps_panned_view_running_with_live_frame(self) -> None:
         history = cli.MetricsHistory(max_samples=120)
@@ -945,16 +1061,62 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.graph_view_offset_seconds, 10)
 
         cli.handle_key_batch(snapshot, state, [",", ",", ","], history=history, graph_frame=graph_frame)
-        self.assertEqual(state.graph_view_offset_seconds, 30)
+        self.assertEqual(state.graph_view_offset_seconds, 40)
 
         cli.handle_key_batch(snapshot, state, ["."], history=history, graph_frame=graph_frame)
-        self.assertEqual(state.graph_view_offset_seconds, 20)
+        self.assertEqual(state.graph_view_offset_seconds, 30)
 
         cli.handle_key_batch(snapshot, state, [".", ".", "."], history=history, graph_frame=graph_frame)
         self.assertEqual(state.graph_view_offset_seconds, 0)
 
         cli.handle_key_batch(snapshot, state, ["r"], history=history, graph_frame=graph_frame)
         self.assertEqual(state.graph_view_offset_seconds, 0)
+
+    def test_handle_key_batch_uses_terminal_width_for_graph_pan(self) -> None:
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        history = cli.MetricsHistory(max_samples=400)
+        for second in range(cli.GRAPH_HISTORY_SECONDS + 121):
+            history.append_sample(
+                cli.MetricSample(
+                    timestamp=start + timedelta(seconds=second),
+                    avg_cpu_percent=float(second),
+                    avg_mem_percent=None,
+                    avg_gpu_percent=None,
+                    avg_gpu_mem_percent=None,
+                )
+            )
+        graph_frame = cli.capture_graph_frame(
+            history,
+            start + timedelta(seconds=cli.GRAPH_HISTORY_SECONDS + 120),
+        )
+        snapshot = Snapshot(
+            timestamp=graph_frame.display_time,
+            processes=[ProcessInfo(gpu_index=0, pid=1, args="rank-0")],
+        )
+
+        narrow_state = cli.ProcessViewState(selected_pid=1)
+        wide_state = cli.ProcessViewState(selected_pid=1)
+        pan_keys = [","] * 200
+
+        cli.handle_key_batch(
+            snapshot,
+            narrow_state,
+            pan_keys,
+            history=history,
+            graph_frame=graph_frame,
+            terminal_width=20,
+        )
+        cli.handle_key_batch(
+            snapshot,
+            wide_state,
+            pan_keys,
+            history=history,
+            graph_frame=graph_frame,
+            terminal_width=500,
+        )
+
+        self.assertGreater(narrow_state.graph_view_offset_seconds, wide_state.graph_view_offset_seconds)
+        self.assertGreater(wide_state.graph_view_offset_seconds, 0)
 
     def test_handle_key_batch_ignores_graph_pan_keys_when_process_zoomed(self) -> None:
         state = cli.ProcessViewState(selected_pid=1, process_zoomed=True, graph_view_offset_seconds=10)
