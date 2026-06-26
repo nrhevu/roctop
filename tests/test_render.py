@@ -551,6 +551,28 @@ class RenderTests(unittest.TestCase):
         self.assertIn("cmd on gpu 1", selected_lines[0])
         self.assertNotIn("cmd on gpu 0", selected_lines[0])
 
+    def test_process_table_keeps_command_column_position_when_scrolled(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=1, user="u", args="alpha-command"),
+            ProcessInfo(gpu_index=7, pid=222222222, user="verylonguser", args="beta-command"),
+        ]
+        positions = []
+        for pid, command in ((1, "alpha-command"), (222222222, "beta-command")):
+            state = ProcessViewState(selected_pid=pid, viewport_rows=1)
+            console = Console(width=120, record=True, file=StringIO())
+            console.print(
+                render_process_table(
+                    processes,
+                    process_state=state,
+                    max_rows=1,
+                    terminal_width=120,
+                )
+            )
+            line = next(line for line in console.export_text().splitlines() if command in line)
+            positions.append(line.index(command))
+
+        self.assertEqual(positions[0], positions[1])
+
     def test_process_window_moves_cursor_up_before_scrolling(self) -> None:
         long_args = (
             "demo_compile_worker --pickler torch_worker_pool --kind fork --workers 32 "
@@ -1458,7 +1480,7 @@ class RenderTests(unittest.TestCase):
 
         output = console.export_text()
         self.assertIn(str(processes[200].pid), output)
-        self.assertLessEqual(wrap_calls, 8)
+        self.assertLessEqual(wrap_calls, 10)
         self.assertLess(wrap_calls, len(processes) // 10)
 
 

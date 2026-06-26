@@ -54,6 +54,9 @@ SORT_MENU_SELECTION_BG = DRACULA_CYAN
 SORT_MENU_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
 PROCESS_TABLE_CHROME_ROWS = 5
+PROCESS_TABLE_COLUMN_COUNT = 9
+PROCESS_TABLE_CELL_PADDING_WIDTH = 2
+PROCESS_TABLE_MIN_COMMAND_WIDTH = 12
 # Braille cells have two horizontal dot columns. Packing two one-second
 # buckets per terminal cell keeps the dotted graph visually continuous.
 GRAPH_COLUMNS_PER_CELL = 2
@@ -68,6 +71,19 @@ class ProcessRenderRow:
     process: ProcessInfo
     command: str
     visual_height: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessTableWidths:
+    gpu: int
+    pid: int
+    user: int
+    gpu_memory: int
+    gpu_memory_percent: int
+    cpu: int
+    mem: int
+    time: int
+    command: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -879,28 +895,29 @@ def render_process_table(
     process_count = len(display_processes)
     display_rows: list[ProcessRenderRow]
     title = None
-    command_width = estimate_process_command_width(terminal_width)
     if process_state is not None:
         if not processes_sorted:
             display_processes = process_state.display_processes(display_processes, process_ancestors)
         process_state.sync(display_processes, viewport_rows=max_rows, adjust_scroll=False)
         title = render_process_title(process_state, len(display_processes))
         tree_prefixes = process_tree_prefixes(display_processes) if process_state.tree_mode else {}
+        table_widths = process_table_widths(display_processes, process_state, terminal_width)
         display_rows = visible_process_window(
             display_processes,
             process_state,
             max_rows,
-            command_width,
+            table_widths.command,
             tree_prefixes=tree_prefixes,
         )
     else:
         if max_rows is not None and len(display_processes) > max_rows:
             display_processes = display_processes[: max(1, max_rows)]
             title = render_static_process_title(len(display_processes), process_count)
+        table_widths = process_table_widths(display_processes, process_state, terminal_width)
         if max_rows is None:
             display_rows = [ProcessRenderRow(proc, process_command(proc), 1) for proc in display_processes]
         else:
-            display_rows = [wrapped_process_row(proc, command_width, max_lines=1) for proc in display_processes]
+            display_rows = [wrapped_process_row(proc, table_widths.command, max_lines=1) for proc in display_processes]
 
     table = Table(
         box=box.SQUARE,
@@ -910,14 +927,54 @@ def render_process_table(
         title=title,
         title_justify="left",
     )
-    table.add_column(process_column_header("GPU", "gpu", process_state), justify="right", style="bold")
-    table.add_column(process_column_header("PID", "pid", process_state), justify="right")
-    table.add_column(process_column_header("USER", "user", process_state))
-    table.add_column(process_column_header("GPU-MEM", "gpu_memory", process_state), justify="right")
-    table.add_column(process_column_header("%GPU-MEM", "gpu_memory_percent", process_state), justify="right")
-    table.add_column(process_column_header("%CPU", "cpu", process_state), justify="right")
-    table.add_column(process_column_header("%MEM", "mem", process_state), justify="right")
-    table.add_column(process_column_header("TIME", "time", process_state), justify="right")
+    table.add_column(
+        process_column_header("GPU", "gpu", process_state),
+        justify="right",
+        style="bold",
+        no_wrap=True,
+        width=table_widths.gpu,
+    )
+    table.add_column(
+        process_column_header("PID", "pid", process_state),
+        justify="right",
+        no_wrap=True,
+        width=table_widths.pid,
+    )
+    table.add_column(
+        process_column_header("USER", "user", process_state),
+        no_wrap=True,
+        width=table_widths.user,
+    )
+    table.add_column(
+        process_column_header("GPU-MEM", "gpu_memory", process_state),
+        justify="right",
+        no_wrap=True,
+        width=table_widths.gpu_memory,
+    )
+    table.add_column(
+        process_column_header("%GPU-MEM", "gpu_memory_percent", process_state),
+        justify="right",
+        no_wrap=True,
+        width=table_widths.gpu_memory_percent,
+    )
+    table.add_column(
+        process_column_header("%CPU", "cpu", process_state),
+        justify="right",
+        no_wrap=True,
+        width=table_widths.cpu,
+    )
+    table.add_column(
+        process_column_header("%MEM", "mem", process_state),
+        justify="right",
+        no_wrap=True,
+        width=table_widths.mem,
+    )
+    table.add_column(
+        process_column_header("TIME", "time", process_state),
+        justify="right",
+        no_wrap=True,
+        width=table_widths.time,
+    )
     table.add_column(
         process_column_header("COMMAND", "command", process_state),
         overflow="fold",
@@ -1048,6 +1105,57 @@ def process_column_header(label: str, sort_field: str, process_state: ProcessVie
         arrow = "↓" if process_state.sort_desc else "↑"
         text.append(f" {arrow}", style=f"bold {DRACULA_ORANGE}")
     return text
+
+
+def process_table_widths(
+    processes: Sequence[ProcessInfo],
+    process_state: ProcessViewState | None,
+    terminal_width: int | None,
+) -> ProcessTableWidths:
+    widths = [
+        len(process_column_header("GPU", "gpu", process_state).plain),
+        len(process_column_header("PID", "pid", process_state).plain),
+        len(process_column_header("USER", "user", process_state).plain),
+        len(process_column_header("GPU-MEM", "gpu_memory", process_state).plain),
+        len(process_column_header("%GPU-MEM", "gpu_memory_percent", process_state).plain),
+        len(process_column_header("%CPU", "cpu", process_state).plain),
+        len(process_column_header("%MEM", "mem", process_state).plain),
+        len(process_column_header("TIME", "time", process_state).plain),
+    ]
+    for proc in processes:
+        for index, value in enumerate(process_metadata_values(proc)):
+            widths[index] = max(widths[index], len(value))
+    command_width = process_table_command_width(terminal_width, widths)
+    return ProcessTableWidths(*widths, command_width)
+
+
+def process_metadata_values(proc: ProcessInfo) -> tuple[str, str, str, str, str, str, str, str]:
+    return (
+        "-" if proc.gpu_index is None else str(proc.gpu_index),
+        str(proc.pid),
+        proc.user or "-",
+        format_bytes_mib(proc.gpu_memory_bytes),
+        percent_text(proc.gpu_memory_percent, digits=1),
+        process_metric_value(proc.cpu_percent, digits=1),
+        process_metric_value(proc.host_mem_percent, digits=1),
+        proc.elapsed or "-",
+    )
+
+
+def process_metric_value(value: float | int | None, digits: int = 1) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.{digits}f}"
+
+
+def process_table_command_width(terminal_width: int | None, metadata_widths: Sequence[int]) -> int:
+    if terminal_width is None:
+        return estimate_process_command_width(terminal_width)
+    table_chrome_width = PROCESS_TABLE_COLUMN_COUNT + 1 + PROCESS_TABLE_COLUMN_COUNT * PROCESS_TABLE_CELL_PADDING_WIDTH
+    return max(
+        PROCESS_TABLE_MIN_COMMAND_WIDTH,
+        terminal_width - sum(metadata_widths) - table_chrome_width,
+    )
 
 
 def visible_process_window(
@@ -1259,7 +1367,7 @@ def process_tree_prefixes(processes: list[ProcessInfo]) -> dict[tuple[int, int |
 def metric_text(value: float | int | None, digits: int = 1) -> Text:
     if value is None:
         return Text("-", style=DRACULA_DIM)
-    return Text(f"{float(value):.{digits}f}", style=percent_style(value))
+    return Text(process_metric_value(value, digits), style=percent_style(value))
 
 
 def render_warnings(warnings: list[str]) -> Panel:
