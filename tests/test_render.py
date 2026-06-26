@@ -315,7 +315,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(next_second[-2], 20.0)
         self.assertEqual(next_second[-1], 20.0)
 
-    def test_metric_values_compress_long_history_window(self) -> None:
+    def test_metric_values_keep_one_second_scale_for_long_history_window(self) -> None:
         samples = [
             MetricSample(
                 timestamp=datetime(2026, 6, 22, 12, 0, 0),
@@ -332,23 +332,15 @@ class RenderTests(unittest.TestCase):
                 avg_gpu_mem_percent=None,
             ),
         ]
-        bucket_seconds = render.metric_graph_bucket_seconds(
-            samples,
-            graph_columns=130 * render.GRAPH_COLUMNS_PER_CELL,
-            end_time=datetime(2026, 6, 22, 12, 18, 0),
-            width=130,
-        )
 
         values = render.metric_values_by_time(
             samples,
             "avg_cpu_percent",
             seconds=130 * render.GRAPH_COLUMNS_PER_CELL,
             end_time=datetime(2026, 6, 22, 12, 18, 0),
-            bucket_seconds=bucket_seconds,
         )
 
-        self.assertGreater(bucket_seconds, 1)
-        self.assertIn(10.0, values)
+        self.assertNotIn(10.0, values)
         self.assertEqual(values[-1], 50.0)
 
     def test_time_axis_uses_one_second_offsets(self) -> None:
@@ -390,12 +382,6 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(axis[519], "├")
         self.assertEqual(axis[534], "├")
 
-    def test_time_axis_scales_long_window_markers_for_compressed_buckets(self) -> None:
-        axis = render.time_axis_line(130, bucket_seconds=5).plain
-        self.assertIn("1080s", axis)
-        self.assertIn("720s", axis)
-        self.assertIn("360s", axis)
-
     def test_time_axis_crops_old_labels_on_narrow_width(self) -> None:
         axis = render.time_axis_line(50).plain
         self.assertNotIn("120s", axis)
@@ -433,13 +419,13 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(bottom_label_lines), 1)
         self.assertLess(axis_lines[0], bottom_label_lines[0])
 
-    def test_metric_graph_compresses_long_history_to_show_full_window(self) -> None:
+    def test_metric_graph_slides_long_history_without_compressing_window(self) -> None:
         history = MetricsHistory(max_samples=1081)
+        start_time = datetime(2026, 6, 22, 12, 0, 0)
         for second in range(1081):
             history.append_sample(
                 MetricSample(
-                    timestamp=datetime(2026, 6, 22, 12, 0, 0).replace(second=0)
-                    + timedelta(seconds=second),
+                    timestamp=start_time + timedelta(seconds=second),
                     avg_cpu_percent=10.0,
                     avg_mem_percent=20.0,
                     avg_gpu_percent=30.0,
@@ -457,7 +443,8 @@ class RenderTests(unittest.TestCase):
         )
 
         output = console.export_text()
-        self.assertIn("1080s", output)
+        self.assertNotIn("1080s", output)
+        self.assertIn("120s", output)
         self.assertIn("Avg %GPU: 30.0%", output)
 
     def test_metric_graph_bottom_half_sticks_to_time_axis(self) -> None:

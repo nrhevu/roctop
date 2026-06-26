@@ -62,7 +62,6 @@ PROCESS_TABLE_MIN_COMMAND_WIDTH = 12
 # buckets per terminal cell keeps the dotted graph visually continuous.
 GRAPH_COLUMNS_PER_CELL = 2
 TIME_AXIS_MARKERS_SECONDS = (1080, 720, 360, 240, 120, 60, 30)
-TIME_AXIS_LABEL_GUTTER = max(len(f"{seconds}s") for seconds in TIME_AXIS_MARKERS_SECONDS) + 2
 BRAILLE_DOTS_BY_COLUMN = (
     (0x01, 0x02, 0x04, 0x40),
     (0x08, 0x10, 0x20, 0x80),
@@ -698,28 +697,15 @@ class MetricGraphPair:
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         width = max(12, options.max_width)
         graph_columns = width * GRAPH_COLUMNS_PER_CELL
-        bucket_seconds = metric_graph_bucket_seconds(self.samples, graph_columns, self.end_time, width)
-        top_values = metric_values_by_time(
-            self.samples,
-            self.top_metric_name,
-            graph_columns,
-            self.end_time,
-            bucket_seconds=bucket_seconds,
-        )
-        bottom_values = metric_values_by_time(
-            self.samples,
-            self.bottom_metric_name,
-            graph_columns,
-            self.end_time,
-            bucket_seconds=bucket_seconds,
-        )
+        top_values = metric_values_by_time(self.samples, self.top_metric_name, graph_columns, self.end_time)
+        bottom_values = metric_values_by_time(self.samples, self.bottom_metric_name, graph_columns, self.end_time)
         yield metric_label(
             self.top_label,
             latest_metric_sample_value(self.samples, self.top_metric_name, self.end_time),
             self.top_style,
         )
         yield from metric_graph_lines(top_values, width=width, height=self.height, style=self.top_style, trim_empty=False)
-        yield time_axis_line(width, offset_seconds=self.time_offset_seconds, bucket_seconds=bucket_seconds)
+        yield time_axis_line(width, offset_seconds=self.time_offset_seconds)
         yield from reversed(
             metric_graph_lines(
                 bottom_values,
@@ -747,18 +733,16 @@ def metric_label(label: str, value: float | None, style: str) -> Text:
     return text
 
 
-def time_axis_line(width: int, offset_seconds: int = 0, bucket_seconds: int = 1) -> Text:
+def time_axis_line(width: int, offset_seconds: int = 0) -> Text:
     width = max(1, width)
     offset_seconds = max(0, offset_seconds)
-    bucket_seconds = max(1, bucket_seconds)
     chars = ["─"] * width
-    seconds_per_cell = bucket_seconds * GRAPH_COLUMNS_PER_CELL
     for seconds in TIME_AXIS_MARKERS_SECONDS:
         marker_seconds = seconds - offset_seconds
         if marker_seconds <= 0:
             continue
         label = f"{seconds}s"
-        marker = width - 1 - marker_seconds // seconds_per_cell
+        marker = width - 1 - marker_seconds // GRAPH_COLUMNS_PER_CELL
         start = marker - len(label)
         space = start - 1
         if space < 0 or start + len(label) > width:
@@ -787,37 +771,13 @@ def latest_metric_sample_value(
     return None
 
 
-def metric_graph_bucket_seconds(
-    samples: Sequence[MetricSample],
-    graph_columns: int,
-    end_time: datetime | None = None,
-    width: int | None = None,
-) -> int:
-    graph_columns = max(1, graph_columns)
-    if not samples:
-        return 1
-    graph_end_time = end_time or samples[-1].timestamp
-    graph_end_second = graph_end_time.replace(microsecond=0)
-    oldest_second = min(sample.timestamp.replace(microsecond=0) for sample in samples)
-    window_seconds = max(0, int((graph_end_second - oldest_second).total_seconds()))
-    if window_seconds <= 0:
-        return 1
-    if width is None:
-        available_columns = graph_columns
-    else:
-        available_columns = max(1, (max(1, width) - TIME_AXIS_LABEL_GUTTER) * GRAPH_COLUMNS_PER_CELL)
-    return max(1, math.ceil(window_seconds / available_columns))
-
-
 def metric_values_by_time(
     samples: Sequence[MetricSample],
     metric_name: str,
     seconds: int,
     end_time: datetime | None = None,
-    bucket_seconds: int = 1,
 ) -> list[float | None]:
     seconds = max(1, seconds)
-    bucket_seconds = max(1, bucket_seconds)
     values: list[float | None] = [None] * seconds
     if not samples:
         return values
@@ -830,13 +790,12 @@ def metric_values_by_time(
         offset = int((graph_end_second - sample_second).total_seconds())
         if offset < 0:
             continue
-        bucket_offset = offset // bucket_seconds
-        if bucket_offset >= seconds:
+        if offset >= seconds:
             continue
         value = getattr(sample, metric_name)
         if value is None:
             continue
-        index = seconds - 1 - bucket_offset
+        index = seconds - 1 - offset
         totals[index] += value
         counts[index] += 1
 
