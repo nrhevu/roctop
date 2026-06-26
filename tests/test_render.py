@@ -684,12 +684,12 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("r: live", plain)
         self.assertIn("<0-1>: gpu", plain)
         self.assertIn("x: kill", plain)
-        self.assertIn("i: info", plain)
+        self.assertIn("i: inspect", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("<0-1>: gpu"), plain.index("s: sort"))
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
-        self.assertLess(plain.index("i: info"), plain.index("x: kill"))
-        self.assertLess(plain.index("i: info"), plain.index("?: help"))
+        self.assertLess(plain.index("i: inspect"), plain.index("x: kill"))
+        self.assertLess(plain.index("i: inspect"), plain.index("?: help"))
         self.assertLess(plain.index("x: kill"), plain.index("?: help"))
         self.assertLess(plain.index("?: help"), plain.index("q: quit"))
         self.assertIn("38;2;255;184;108", styled)
@@ -744,6 +744,20 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(help_row.startswith("L"))
         self.assertTrue(help_row.rstrip().endswith("R"))
         self.assertIn("normal, help", help_row)
+
+    def test_help_popup_keeps_column_positions_when_scrolled(self) -> None:
+        action_positions = []
+        mode_positions = []
+        for offset in (0, 3):
+            state = ProcessViewState(mode=MODE_HELP, help_scroll_offset=offset)
+            console = Console(width=120, record=True, file=StringIO())
+            console.print(render.render_help_popup(state, terminal_width=120))
+            line = next(line for line in console.export_text().splitlines() if "Move sort/kill menu selection" in line)
+            action_positions.append(line.index("Move sort/kill menu selection"))
+            mode_positions.append(line.index("sort, kill"))
+
+        self.assertEqual(action_positions[0], action_positions[1])
+        self.assertEqual(mode_positions[0], mode_positions[1])
 
     def test_process_info_popup_renders_selected_process_details(self) -> None:
         process = ProcessInfo(
@@ -855,6 +869,43 @@ class RenderTests(unittest.TestCase):
 
         state.handle_key(KEY_DOWN, [process], processes_synced=True)
         self.assertEqual(state.process_info_scroll_offset, 1)
+
+    def test_process_info_popup_keeps_value_column_position_when_scrolled(self) -> None:
+        long_command = "/opt/conda/envs/py_3.10/bin/python3 -u /scratch/demo/train.py " + " ".join(
+            f"--flag-{index} value-{index}" for index in range(80)
+        )
+        process = ProcessInfo(
+            gpu_index=None,
+            pid=3000674,
+            ppid=3000661,
+            user="root",
+            name="python",
+            command="python",
+            args=long_command,
+        )
+        detail = ProcessDetailInfo(
+            pid=3000674,
+            state="S (sleeping)",
+            threads=23,
+            vm_rss_kib=1024,
+            vm_size_kib=2048,
+            cmdline=long_command,
+        )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[process],
+        )
+        value_positions = []
+        for offset in (0, 14):
+            state = ProcessViewState(selected_pid=3000674, mode=MODE_PROCESS_INFO, viewport_rows=4)
+            state.open_process_info(process, detail, child_count=0)
+            state.process_info_scroll_offset = offset
+            console = Console(width=160, record=True, file=StringIO())
+            console.print(render.render_process_info_popup(snapshot, state, terminal_width=160))
+            line = next(line for line in console.export_text().splitlines() if "Command" in line)
+            value_positions.append(line.index("/opt/conda"))
+
+        self.assertEqual(value_positions[0], value_positions[1])
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
         processes = [

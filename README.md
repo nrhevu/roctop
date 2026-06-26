@@ -17,7 +17,7 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 - **Live history graphs:** split graph panel tracks average host CPU, host memory, GPU utilization, and GPU memory usage over the recent refresh window.
 - **Process visibility:** process table shows GPU index, PID, user, GPU memory, GPU memory percent, host CPU/memory percent, elapsed runtime, and full wrapped command lines.
 - **Interactive process navigation:** move through processes with `j/k` or arrow keys, page through long lists, toggle process tree view, keep the selected process visible across refreshes, and sort by GPU, memory, CPU, PID, user, time, or command.
-- **Popup details and help:** `i` opens selected process details from the current snapshot and `/proc`, while `?` opens an in-app keybinding reference. Both popups support arrow keys and `h/j/k/l` navigation.
+- **Inspect and help popups:** `i` inspects the selected process using the current snapshot and `/proc`, while `?` opens an in-app keybinding reference. Both popups support arrow keys and `h/j/k/l` navigation.
 - **Safe process actions:** `x` opens a high-contrast confirmation menu with Cancel, SIGTERM, and SIGKILL choices, plus status messages for missing processes, permission errors, and other failures.
 - **Robust data collection:** combines `rocm-smi` GPU snapshots, `amd-smi process` process memory data, and `ps` process metadata, with fallbacks when process-specific data is missing or malformed.
 - **Script-friendly modes:** `--once` renders a single terminal snapshot, `--json` prints normalized snapshot data, and `--interval` controls live refresh cadence.
@@ -66,7 +66,7 @@ h/Left, l/Right   jump to previous/next sibling in tree view
 /                 search processes
 n/N               next/previous search match
 f                 filter visible processes
-i                 show selected process details
+i                 inspect selected process
 x                 kill selected process with confirmation
 ?                 open/close help
 q or Ctrl-C       quit
@@ -75,10 +75,10 @@ q or Ctrl-C       quit
 ## Popup Controls
 
 ```text
-j/k or Up/Down      scroll help or process info
-h/l or Left/Right   page help or process info
+j/k or Up/Down      scroll help or inspect view
+h/l or Left/Right   page help or inspect view
 ? or Esc            close help
-i or Esc            close process info
+i or Esc            close inspect view
 h/l or arrows       move sort or kill menu selection
 Enter               apply selected sort or kill option
 y                   send SIGTERM in kill confirmation

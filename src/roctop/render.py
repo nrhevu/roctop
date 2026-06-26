@@ -309,7 +309,7 @@ def append_process_help(
     append_keybinding(details, "/", "search", separator=separator)
     append_keybinding(details, "f", "filter", separator=separator)
     append_keybinding(details, "z", "zoom", separator=separator)
-    append_keybinding(details, "i", "info", separator=separator)
+    append_keybinding(details, "i", "inspect", separator=separator)
     append_keybinding(details, "x", "kill", separator=separator)
     append_keybinding(details, "?", "help", separator=separator)
     append_keybinding(details, "q", "quit", separator=separator)
@@ -347,19 +347,20 @@ def render_help_popup(
     max_offset = max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
     start = min(max(0, process_state.help_scroll_offset), max_offset)
     end = min(len(HELP_ENTRIES), start + HELP_VISIBLE_ROWS)
+    available_width = terminal_width or 88
+    panel_width = min(128, max(1, available_width - 4))
+    help_rows = help_popup_rows(gpus)
+    key_width, action_width, mode_width = help_popup_column_widths(help_rows, panel_width)
 
     table = Table(box=box.SIMPLE, expand=True, show_lines=False, padding=(0, 1))
-    table.add_column("KEY", style=f"bold {DRACULA_ORANGE}", no_wrap=True)
-    table.add_column("ACTION", style=DRACULA_FG, ratio=1)
-    table.add_column("MODE", style=DRACULA_DIM, no_wrap=True)
-    for key, action, mode in HELP_ENTRIES[start:end]:
-        display_key = gpu_filter_key_label(gpus) if key == "0-9" else key
-        table.add_row(display_key or key, action, mode)
+    table.add_column("KEY", style=f"bold {DRACULA_ORANGE}", no_wrap=True, width=key_width)
+    table.add_column("ACTION", style=DRACULA_FG, width=action_width)
+    table.add_column("MODE", style=DRACULA_DIM, no_wrap=True, width=mode_width)
+    for key, action, mode in help_rows[start:end]:
+        table.add_row(key, action, mode)
     table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   ?/Esc: close"
     table.caption_style = DRACULA_DIM
 
-    available_width = terminal_width or 88
-    panel_width = min(128, max(1, available_width - 4))
     return Panel(
         table,
         title=Text(f"Help  {start + 1}-{end}/{len(HELP_ENTRIES)}", style=f"bold {DRACULA_CYAN}"),
@@ -374,9 +375,12 @@ def render_process_info_popup(
     process_state: ProcessViewState,
     terminal_width: int | None = None,
 ) -> Panel:
+    panel_width = process_info_panel_width(terminal_width)
+    info_rows = process_info_rows(snapshot, process_state)
+    label_width, value_width = process_info_column_widths(info_rows, panel_width)
     rows = process_info_visual_rows(
-        process_info_rows(snapshot, process_state),
-        process_info_panel_width(terminal_width),
+        info_rows,
+        value_width,
     )
     process_state.process_info_render_row_count = len(rows)
     max_offset = max(0, len(rows) - PROCESS_INFO_VISIBLE_ROWS)
@@ -385,8 +389,8 @@ def render_process_info_popup(
     end = min(len(rows), start + PROCESS_INFO_VISIBLE_ROWS)
 
     table = Table(box=box.SIMPLE, expand=True, show_header=False, show_lines=False, padding=(0, 1))
-    table.add_column("FIELD", style=DRACULA_DIM, no_wrap=True)
-    table.add_column("VALUE", style=DRACULA_FG, ratio=1, no_wrap=True, overflow="crop")
+    table.add_column("FIELD", style=DRACULA_DIM, no_wrap=True, width=label_width)
+    table.add_column("VALUE", style=DRACULA_FG, no_wrap=True, overflow="crop", width=value_width)
     visible_rows = rows[start:end]
     for label, value in visible_rows:
         table.add_row(label, value or "-")
@@ -402,7 +406,7 @@ def render_process_info_popup(
         title=Text(title, style=f"bold {DRACULA_CYAN}"),
         border_style=DRACULA_CYAN,
         box=box.SQUARE,
-        width=process_info_panel_width(terminal_width),
+        width=panel_width,
     )
 
 
@@ -411,10 +415,33 @@ def process_info_panel_width(terminal_width: int | None = None) -> int:
     return min(128, max(1, available_width - 4))
 
 
-def process_info_visual_rows(rows: list[tuple[str, str]], panel_width: int) -> list[tuple[str, str]]:
+def help_popup_rows(gpus: Sequence[GpuInfo] | None = None) -> list[tuple[str, str, str]]:
+    rows = []
+    for key, action, mode in HELP_ENTRIES:
+        display_key = gpu_filter_key_label(gpus) if key == "0-9" else key
+        rows.append((display_key or key, action, mode))
+    return rows
+
+
+def help_popup_column_widths(rows: list[tuple[str, str, str]], panel_width: int) -> tuple[int, int, int]:
+    key_width = max((len(key) for key, _action, _mode in rows), default=0)
+    key_width = max(key_width, len("KEY"))
+    mode_width = max((len(mode) for _key, _action, mode in rows), default=0)
+    mode_width = max(mode_width, len("MODE"))
+    max_action_width = max((len(action) for _key, action, _mode in rows), default=0)
+    max_action_width = max(max_action_width, len("ACTION"))
+    action_width = min(max_action_width, max(1, panel_width - key_width - mode_width - 16))
+    return key_width, action_width, mode_width
+
+
+def process_info_column_widths(rows: list[tuple[str, str]], panel_width: int) -> tuple[int, int]:
     label_width = max((len(label) for label, _value in rows), default=0)
     label_width = min(max(label_width, 8), 18)
     value_width = max(8, panel_width - label_width - 12)
+    return label_width, value_width
+
+
+def process_info_visual_rows(rows: list[tuple[str, str]], value_width: int) -> list[tuple[str, str]]:
     visual_rows: list[tuple[str, str]] = []
     for label, value in rows:
         wrapped_lines = wrap_process_info_value(value or "-", value_width)

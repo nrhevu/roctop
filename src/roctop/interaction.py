@@ -95,8 +95,8 @@ HELP_VISIBLE_ROWS = 22
 PROCESS_INFO_VISIBLE_ROWS = 24
 HELP_ENTRIES = (
     ("?", "Open help / close help", "normal, help"),
-    ("k/j or Up/Down", "Scroll popup one row", "help, info"),
-    ("h/l or Left/Right", "Page popup up/down", "help, info"),
+    ("k/j or Up/Down", "Scroll popup one row", "help, inspect"),
+    ("h/l or Left/Right", "Page popup up/down", "help, inspect"),
     ("j/k or Up/Down", "Move process cursor", "normal"),
     ("PgUp/PgDn", "Move process cursor by page", "normal"),
     ("s", "Open sort menu", "normal"),
@@ -115,7 +115,7 @@ HELP_ENTRIES = (
     ("h / Left", "Jump to previous sibling", "tree"),
     ("l / Right", "Jump to next sibling", "tree"),
     ("x", "Open kill confirmation", "normal"),
-    ("i", "Open selected process details", "normal"),
+    ("i", "Inspect selected process", "normal"),
     ("y", "Send SIGTERM in kill confirmation", "kill"),
     ("q", "Quit or cancel menu", "normal, menus"),
     ("Ctrl-C", "Quit", "all"),
