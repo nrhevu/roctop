@@ -540,6 +540,81 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual([round(update_time, 1) for update_time in live.update_times[:3]], [1.0, 2.0, 3.0])
 
+    def test_live_loop_updates_display_time_on_one_second_redraw(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=100)
+
+        class FakeCollector:
+            def raise_if_failed(self) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        class FakeClock:
+            def __init__(self) -> None:
+                self.current = 0.0
+
+            def monotonic(self) -> float:
+                return self.current
+
+            def advance(self, seconds: float) -> None:
+                self.current += seconds
+
+        class FakeLive:
+            def __init__(self, clock: FakeClock) -> None:
+                self.clock = clock
+                self.update_times: list[float] = []
+
+            def update(self, renderable, refresh: bool = False) -> None:
+                self.update_times.append(self.clock.current)
+
+        class FakeKeyboard:
+            def __init__(self, clock: FakeClock, live: FakeLive) -> None:
+                self.clock = clock
+                self.live = live
+
+            def read_keys(self, timeout: float):
+                self.clock.advance(timeout)
+                if len(self.live.update_times) >= 1:
+                    return ["q"]
+                return []
+
+        initial_display_time = datetime(2026, 6, 22, 12, 0, 0)
+        display_times = []
+        clock = FakeClock()
+        live = FakeLive(clock)
+        original_monotonic = cli.time.monotonic
+        original_render_live_snapshot = cli.render_live_snapshot
+
+        def fake_render_live_snapshot(*args, display_time=None, **kwargs):
+            display_times.append(display_time)
+            return "rendered"
+
+        try:
+            cli.time.monotonic = clock.monotonic
+            cli.render_live_snapshot = fake_render_live_snapshot
+            cli.poll_live_until_quit(
+                live,
+                FakeKeyboard(clock, live),
+                Snapshot(timestamp=initial_display_time),
+                cli.MetricsHistory(max_samples=120),
+                cli.ProcessViewState(),
+                FakeConsole(),
+                FakeCollector(),
+                interval=2.0,
+                display_time=initial_display_time,
+            )
+        finally:
+            cli.time.monotonic = original_monotonic
+            cli.render_live_snapshot = original_render_live_snapshot
+
+        self.assertEqual([round(update_time, 1) for update_time in live.update_times[:1]], [1.0])
+        self.assertGreaterEqual(len(display_times), 1)
+        self.assertNotEqual(display_times[0], initial_display_time)
+
     def test_live_render_snapshot_uses_cached_graph_frame(self) -> None:
         class FakeConsole:
             @property

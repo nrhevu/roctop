@@ -573,6 +573,21 @@ class RenderTests(unittest.TestCase):
 
         self.assertEqual(positions[0], positions[1])
 
+    def test_process_table_elapsed_time_advances_with_display_offset(self) -> None:
+        process = ProcessInfo(gpu_index=0, pid=123, user="demo", elapsed="09:04:23", args="python train.py")
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                [process],
+                process_state=ProcessViewState(selected_pid=123, viewport_rows=1),
+                max_rows=1,
+                terminal_width=120,
+                elapsed_offset_seconds=1,
+            )
+        )
+
+        self.assertIn("09:04:24", console.export_text())
+
     def test_process_window_moves_cursor_up_before_scrolling(self) -> None:
         long_args = (
             "demo_compile_worker --pickler torch_worker_pool --kind fork --workers 32 "

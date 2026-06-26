@@ -187,6 +187,35 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(second[42]["user"], "demo1")
         self.assertEqual(third[42]["user"], "demo2")
 
+    def test_process_enrichment_reads_fresh_ps_rows_without_cache_delay(self) -> None:
+        calls: list[list[int]] = []
+
+        def fake_read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
+            calls.append(list(pids))
+            suffix = str(len(calls))
+            return {
+                pid: {
+                    "user": "demo",
+                    "cpu": suffix,
+                    "mem": "0.1",
+                    "etime": f"00:0{suffix}",
+                    "comm": "python",
+                    "args": f"python worker-{suffix}.py",
+                }
+                for pid in pids
+            }
+
+        process = ProcessInfo(gpu_index=0, pid=42)
+        with patch("roctop.collectors.read_ps_rows", side_effect=fake_read_ps_rows):
+            collectors.enrich_processes_with_ps([process])
+            first_elapsed = process.elapsed
+            collectors.enrich_processes_with_ps([process])
+
+        self.assertEqual(calls, [[42], [42]])
+        self.assertEqual(first_elapsed, "00:01")
+        self.assertEqual(process.elapsed, "00:02")
+        self.assertEqual(process.args, "python worker-2.py")
+
     def test_read_ps_rows_parses_ppid(self) -> None:
         def fake_run_command(args, timeout=None) -> CommandResult:
             return CommandResult(

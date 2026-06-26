@@ -250,10 +250,10 @@ def poll_live_until_quit(
         status_expired = process_state.expire_status_message(now)
         refresh_due = now >= next_render_at
         graph_due = now >= next_graph_at
-        if refresh_due:
+        if refresh_due or graph_due:
             display_time = datetime.now()
         if graph_due:
-            graph_frame = advance_graph_frame(history, graph_frame, datetime.now())
+            graph_frame = advance_graph_frame(history, graph_frame, display_time)
         if current_size != rendered_size or status_expired or refresh_due or graph_due:
             live.update(
                 render_live_snapshot(

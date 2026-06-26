@@ -445,7 +445,7 @@ def enrich_processes_with_ps(processes: list[ProcessInfo]) -> None:
     if not processes:
         return
     pid_list = sorted({proc.pid for proc in processes})
-    ps_rows = read_ps_rows_cached(pid_list)
+    ps_rows = read_ps_rows_fresh(pid_list)
     for proc in processes:
         row = ps_rows.get(proc.pid)
         if not row:
@@ -539,6 +539,25 @@ def read_ps_rows_cached(pids: list[int]) -> dict[int, dict[str, str]]:
             _ps_row_cache[pid] = (now, row)
             rows[pid] = row
 
+    return rows
+
+
+def read_ps_rows_fresh(pids: list[int]) -> dict[int, dict[str, str]]:
+    if not pids:
+        return {}
+
+    fresh_rows = read_ps_rows(pids)
+    now = time.monotonic()
+    for pid, row in fresh_rows.items():
+        _ps_row_cache[pid] = (now, row)
+
+    rows = dict(fresh_rows)
+    for pid in pids:
+        if pid in rows:
+            continue
+        cached = _ps_row_cache.get(pid)
+        if cached is not None:
+            rows[pid] = cached[1]
     return rows
 
 

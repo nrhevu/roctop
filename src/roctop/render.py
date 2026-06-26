@@ -32,6 +32,7 @@ from .interaction import (
     SORT_LABELS,
     SORT_OPTIONS,
     ProcessViewState,
+    elapsed_seconds,
     process_selection_key,
 )
 from .models import GpuInfo, ProcessInfo, Snapshot
@@ -188,6 +189,7 @@ def render_snapshot(
             terminal_width=terminal_width,
             processes_sorted=display_processes is not None,
             process_ancestors=snapshot.process_ancestors,
+            elapsed_offset_seconds=process_elapsed_offset_seconds(snapshot.timestamp, display_time),
         )
         if process_state is not None and process_state.process_zoomed:
             parts = [process_table]
@@ -256,6 +258,12 @@ def process_inline_menu_rows(process_state: ProcessViewState | None) -> int:
     if process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM, MODE_SEARCH, MODE_FILTER):
         return 1
     return 0
+
+
+def process_elapsed_offset_seconds(snapshot_time: datetime, display_time: datetime | None) -> int:
+    if display_time is None:
+        return 0
+    return max(0, int((display_time - snapshot_time).total_seconds()))
 
 
 def render_header(
@@ -890,6 +898,7 @@ def render_process_table(
     terminal_width: int | None = None,
     processes_sorted: bool = False,
     process_ancestors: list[ProcessInfo] | None = None,
+    elapsed_offset_seconds: int = 0,
 ) -> Table:
     display_processes = list(processes)
     process_count = len(display_processes)
@@ -901,7 +910,12 @@ def render_process_table(
         process_state.sync(display_processes, viewport_rows=max_rows, adjust_scroll=False)
         title = render_process_title(process_state, len(display_processes))
         tree_prefixes = process_tree_prefixes(display_processes) if process_state.tree_mode else {}
-        table_widths = process_table_widths(display_processes, process_state, terminal_width)
+        table_widths = process_table_widths(
+            display_processes,
+            process_state,
+            terminal_width,
+            elapsed_offset_seconds,
+        )
         display_rows = visible_process_window(
             display_processes,
             process_state,
@@ -913,7 +927,12 @@ def render_process_table(
         if max_rows is not None and len(display_processes) > max_rows:
             display_processes = display_processes[: max(1, max_rows)]
             title = render_static_process_title(len(display_processes), process_count)
-        table_widths = process_table_widths(display_processes, process_state, terminal_width)
+        table_widths = process_table_widths(
+            display_processes,
+            process_state,
+            terminal_width,
+            elapsed_offset_seconds,
+        )
         if max_rows is None:
             display_rows = [ProcessRenderRow(proc, process_command(proc), 1) for proc in display_processes]
         else:
@@ -1003,7 +1022,7 @@ def render_process_table(
             Text(percent_text(proc.gpu_memory_percent, digits=1), style=gpu_mem_style),
             metric_text(proc.cpu_percent, digits=1),
             metric_text(proc.host_mem_percent, digits=1),
-            proc.elapsed or "-",
+            process_elapsed_text(proc.elapsed, elapsed_offset_seconds),
             command_cell,
             style=(
                 f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}"
@@ -1111,6 +1130,7 @@ def process_table_widths(
     processes: Sequence[ProcessInfo],
     process_state: ProcessViewState | None,
     terminal_width: int | None,
+    elapsed_offset_seconds: int = 0,
 ) -> ProcessTableWidths:
     widths = [
         len(process_column_header("GPU", "gpu", process_state).plain),
@@ -1123,13 +1143,16 @@ def process_table_widths(
         len(process_column_header("TIME", "time", process_state).plain),
     ]
     for proc in processes:
-        for index, value in enumerate(process_metadata_values(proc)):
+        for index, value in enumerate(process_metadata_values(proc, elapsed_offset_seconds)):
             widths[index] = max(widths[index], len(value))
     command_width = process_table_command_width(terminal_width, widths)
     return ProcessTableWidths(*widths, command_width)
 
 
-def process_metadata_values(proc: ProcessInfo) -> tuple[str, str, str, str, str, str, str, str]:
+def process_metadata_values(
+    proc: ProcessInfo,
+    elapsed_offset_seconds: int = 0,
+) -> tuple[str, str, str, str, str, str, str, str]:
     return (
         "-" if proc.gpu_index is None else str(proc.gpu_index),
         str(proc.pid),
@@ -1138,7 +1161,7 @@ def process_metadata_values(proc: ProcessInfo) -> tuple[str, str, str, str, str,
         percent_text(proc.gpu_memory_percent, digits=1),
         process_metric_value(proc.cpu_percent, digits=1),
         process_metric_value(proc.host_mem_percent, digits=1),
-        proc.elapsed or "-",
+        process_elapsed_text(proc.elapsed, elapsed_offset_seconds),
     )
 
 
@@ -1146,6 +1169,45 @@ def process_metric_value(value: float | int | None, digits: int = 1) -> str:
     if value is None:
         return "-"
     return f"{float(value):.{digits}f}"
+
+
+def process_elapsed_text(value: str, offset_seconds: int = 0) -> str:
+    text = str(value or "").strip()
+    if not text or text == "-":
+        return "-"
+    seconds = parse_process_elapsed_seconds(text)
+    if seconds is None:
+        return text
+    return format_process_elapsed_seconds(seconds + max(0, offset_seconds))
+
+
+def parse_process_elapsed_seconds(value: str) -> int | None:
+    text = str(value or "").strip()
+    if not text or text == "-":
+        return None
+    time_text = text
+    if "-" in time_text:
+        day_text, time_text = time_text.split("-", 1)
+        if not day_text.isdigit():
+            return None
+    parts = time_text.split(":")
+    if not parts or len(parts) > 3:
+        return None
+    if not all(part.isdigit() for part in parts):
+        return None
+    return elapsed_seconds(text)
+
+
+def format_process_elapsed_seconds(total_seconds: int) -> str:
+    total_seconds = max(0, total_seconds)
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}-{hours:02d}:{minutes:02d}:{seconds:02d}"
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def process_table_command_width(terminal_width: int | None, metadata_widths: Sequence[int]) -> int:
