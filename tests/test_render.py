@@ -643,14 +643,15 @@ class RenderTests(unittest.TestCase):
             return [proc.pid for proc in (*ancestors, *processes) if str(proc.pid) in output]
 
         before_pids = visible_pids()
-        self.assertEqual(before_pids[-1], 7103)
+        self.assertIn(7103, before_pids)
+        selected_before_index = before_pids.index(7103)
 
         _quit_requested, display_processes = handle_key_batch(snapshot, state, [KEY_UP])
         after_pids = visible_pids(display_processes)
 
         self.assertEqual(after_pids, before_pids)
         self.assertEqual(state.selected_pid, 7202)
-        self.assertEqual(after_pids.index(state.selected_pid), len(after_pids) - 2)
+        self.assertEqual(after_pids.index(state.selected_pid), selected_before_index - 1)
 
     def test_process_help_renders_action_keys_without_navigation_hints(self) -> None:
         snapshot = Snapshot(
@@ -1305,6 +1306,29 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("200", output)
         self.assertLessEqual(max(len(line) for line in lines), 120)
         self.assertLessEqual(len(lines), 18)
+
+    def test_process_window_truncates_next_row_to_fill_visual_height(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=500, user="demo", args="short-one"),
+            ProcessInfo(gpu_index=1, pid=501, user="demo", args="short-two"),
+            ProcessInfo(
+                gpu_index=2,
+                pid=502,
+                user="demo",
+                args=" ".join(f"--very-long-option-{index}=demo-value" for index in range(20)),
+            ),
+            ProcessInfo(gpu_index=3, pid=503, user="demo", args="still-running"),
+        ]
+        state = ProcessViewState(selected_pid=500, viewport_rows=4)
+        state.sync(processes, viewport_rows=4)
+
+        rows = render.visible_process_window(processes, state, max_visual_rows=4, command_width=24)
+
+        self.assertEqual([row.process.pid for row in rows], [500, 501, 502])
+        self.assertEqual(sum(row.visual_height for row in rows), 4)
+        self.assertEqual(rows[-1].visual_height, 2)
+        self.assertTrue(rows[-1].command.endswith("..."))
+        self.assertNotIn("still-running", "\n".join(row.command for row in rows))
 
     def test_selected_process_command_truncates_to_visual_budget(self) -> None:
         process = ProcessInfo(

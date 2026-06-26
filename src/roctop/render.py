@@ -1037,10 +1037,12 @@ def visible_process_window(
     with profile_span("process-window"):
         selected_index = max(0, min(process_state.selected_index, len(processes) - 1))
         max_visual_rows = max(1, max_visual_rows or process_state.viewport_rows)
-        wrapped_rows: dict[int, ProcessRenderRow] = {}
+        wrapped_rows: dict[tuple[int, int], ProcessRenderRow] = {}
 
-        def row_at(index: int) -> ProcessRenderRow:
-            row = wrapped_rows.get(index)
+        def row_at(index: int, max_lines: int | None = None) -> ProcessRenderRow:
+            row_max_lines = max(1, max_lines or max_visual_rows)
+            key = (index, row_max_lines)
+            row = wrapped_rows.get(key)
             if row is None:
                 prefix = ""
                 if tree_prefixes:
@@ -1048,28 +1050,33 @@ def visible_process_window(
                 row = wrapped_process_row(
                     processes[index],
                     command_width,
-                    max_lines=max_visual_rows,
+                    max_lines=row_max_lines,
                     tree_prefix=prefix,
                 )
-                wrapped_rows[index] = row
+                wrapped_rows[key] = row
             return row
 
-        def window_from(start_index: int) -> tuple[int, bool]:
+        def window_from(start_index: int) -> tuple[list[ProcessRenderRow], bool]:
             used_rows = 0
-            end_index = start_index
+            rows: list[ProcessRenderRow] = []
             selected_visible = False
-            while end_index < len(processes):
-                row = row_at(end_index)
+            index = start_index
+            while index < len(processes):
+                row = row_at(index)
                 if used_rows > 0 and used_rows + row.visual_height > max_visual_rows:
+                    remaining_rows = max_visual_rows - used_rows
+                    if remaining_rows > 0 and index != selected_index:
+                        rows.append(row_at(index, remaining_rows))
                     break
                 used_rows += row.visual_height
-                if end_index == selected_index:
+                rows.append(row)
+                if index == selected_index:
                     selected_visible = True
-                end_index += 1
-            return end_index, selected_visible
+                index += 1
+            return rows, selected_visible
 
         start = max(0, min(process_state.scroll_offset, len(processes) - 1))
-        end, selected_visible = window_from(start)
+        rows, selected_visible = window_from(start)
         if not selected_visible:
             if selected_index < start:
                 start = selected_index
@@ -1082,10 +1089,10 @@ def visible_process_window(
                         break
                     start -= 1
                     used_rows += row.visual_height
-            end, _ = window_from(start)
+            rows, _ = window_from(start)
 
         process_state.scroll_offset = start
-        return [row_at(index) for index in range(start, end)]
+        return rows
 
 
 def process_command(proc: ProcessInfo) -> str:
