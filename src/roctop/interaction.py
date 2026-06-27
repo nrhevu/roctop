@@ -105,8 +105,9 @@ HELP_ENTRIES = (
     ("/", "Search processes", "normal"),
     ("n/N", "Next/previous search match", "normal"),
     ("f", "Filter processes", "normal"),
-    ("0-9", "Filter processes by GPU id", "normal"),
+    ("0-9", "Focus GPU", "normal"),
     ("z", "Zoom process table", "normal"),
+    ("g", "Toggle GPU graphs", "normal"),
     (",/.", "Pan graph older/newer", "normal"),
     ("r", "Reset graph to live", "normal"),
     ("Esc", "Clear filter or cancel active mode", "normal, menus"),
@@ -158,6 +159,7 @@ class ProcessViewState:
     filter_input: str = ""
     gpu_filter_index: int | None = None
     process_zoomed: bool = False
+    gpu_graphs_visible: bool = False
     graph_view_offset_seconds: int = 0
 
     def sorted_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
@@ -282,6 +284,10 @@ class ProcessViewState:
 
         if key == "z":
             self.process_zoomed = not self.process_zoomed
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key == "g":
+            self.gpu_graphs_visible = not self.gpu_graphs_visible
             self.clear_status_message()
             return KeyResult(changed=True)
 
@@ -692,7 +698,7 @@ class ProcessViewState:
         if self.status_message:
             parts.append(self.status_message)
         if self.gpu_filter_index is not None:
-            parts.append(f"GPU: {self.gpu_filter_index}")
+            parts.append(f"GPU focus: {self.gpu_filter_index}")
         if self.filter_query.strip() and self.mode != MODE_FILTER:
             parts.append(f"Filter: {self.filter_query.strip()}")
         return "   ".join(parts)

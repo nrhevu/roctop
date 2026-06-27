@@ -14,7 +14,7 @@ from rich.live import Live
 
 from . import __version__
 from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot, read_process_detail
-from .history import MetricSample, MetricsHistory
+from .history import GpuMetricSample, MetricSample, MetricsHistory
 from .interaction import (
     KEY_DOWN,
     KEY_ENTER,
@@ -62,6 +62,12 @@ class SnapshotUpdate:
 class GraphFrame:
     display_time: datetime
     history_samples: tuple[MetricSample, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSampleValues:
+    metric_values: tuple[float | None, ...]
+    gpu_metrics: tuple[GpuMetricSample, ...]
 
 
 class BackgroundSnapshotCollector:
@@ -654,7 +660,7 @@ def graph_samples_until(
     first_second = min(graph_frame_time(sample.timestamp) for sample in samples)
     start_second = max(first_second, end_second - timedelta(seconds=max(0, max_samples - 1)))
     bucket_samples: list[MetricSample] = []
-    previous_values: tuple[float | None, ...] | None = None
+    previous_values: GraphSampleValues | None = None
     bucket_time = start_second
     while bucket_time <= end_second:
         sample = graph_sample_for_second(samples, bucket_time, previous_values)
@@ -667,10 +673,14 @@ def graph_samples_until(
 def graph_sample_for_second(
     samples: tuple[MetricSample, ...],
     bucket_time: datetime,
-    previous_values: tuple[float | None, ...] | None = None,
+    previous_values: GraphSampleValues | None = None,
 ) -> MetricSample:
     totals = [0.0] * len(GRAPH_METRIC_FIELDS)
     counts = [0] * len(GRAPH_METRIC_FIELDS)
+    gpu_util_totals: dict[int, float] = {}
+    gpu_util_counts: dict[int, int] = {}
+    gpu_mem_totals: dict[int, float] = {}
+    gpu_mem_counts: dict[int, int] = {}
     for sample in samples:
         if graph_frame_time(sample.timestamp) != bucket_time:
             continue
@@ -680,16 +690,58 @@ def graph_sample_for_second(
                 continue
             totals[index] += value
             counts[index] += 1
+        for gpu_metric in sample.gpu_metrics:
+            gpu_index = gpu_metric.index
+            if gpu_metric.utilization_percent is not None:
+                gpu_util_totals[gpu_index] = gpu_util_totals.get(gpu_index, 0.0) + gpu_metric.utilization_percent
+                gpu_util_counts[gpu_index] = gpu_util_counts.get(gpu_index, 0) + 1
+            if gpu_metric.memory_percent is not None:
+                gpu_mem_totals[gpu_index] = gpu_mem_totals.get(gpu_index, 0.0) + gpu_metric.memory_percent
+                gpu_mem_counts[gpu_index] = gpu_mem_counts.get(gpu_index, 0) + 1
 
     if previous_values is None:
         previous_values = latest_graph_values_at_or_before(samples, bucket_time)
 
+    previous_metric_values = previous_values.metric_values if previous_values is not None else None
     values: list[float | None] = []
     for index, count in enumerate(counts):
         if count:
             values.append(totals[index] / count)
         else:
-            values.append(previous_values[index] if previous_values is not None else None)
+            values.append(previous_metric_values[index] if previous_metric_values is not None else None)
+
+    previous_gpu_metrics = {
+        gpu_metric.index: gpu_metric for gpu_metric in previous_values.gpu_metrics
+    } if previous_values is not None else {}
+    gpu_indices = sorted(
+        set(previous_gpu_metrics)
+        | set(gpu_util_counts)
+        | set(gpu_mem_counts)
+    )
+    gpu_metrics: list[GpuMetricSample] = []
+    for gpu_index in gpu_indices:
+        previous_gpu_metric = previous_gpu_metrics.get(gpu_index)
+        if gpu_index in gpu_util_counts:
+            utilization_percent = gpu_util_totals[gpu_index] / gpu_util_counts[gpu_index]
+        elif previous_gpu_metric is not None:
+            utilization_percent = previous_gpu_metric.utilization_percent
+        else:
+            utilization_percent = None
+
+        if gpu_index in gpu_mem_counts:
+            memory_percent = gpu_mem_totals[gpu_index] / gpu_mem_counts[gpu_index]
+        elif previous_gpu_metric is not None:
+            memory_percent = previous_gpu_metric.memory_percent
+        else:
+            memory_percent = None
+
+        gpu_metrics.append(
+            GpuMetricSample(
+                index=gpu_index,
+                utilization_percent=utilization_percent,
+                memory_percent=memory_percent,
+            )
+        )
 
     return MetricSample(
         timestamp=bucket_time,
@@ -697,14 +749,16 @@ def graph_sample_for_second(
         avg_mem_percent=values[1],
         avg_gpu_percent=values[2],
         avg_gpu_mem_percent=values[3],
+        gpu_metrics=tuple(gpu_metrics),
     )
 
 
 def latest_graph_values_at_or_before(
     samples: tuple[MetricSample, ...],
     bucket_time: datetime,
-) -> tuple[float | None, ...] | None:
+) -> GraphSampleValues | None:
     values: list[float | None] = [None] * len(GRAPH_METRIC_FIELDS)
+    gpu_metrics: dict[int, GpuMetricSample] = {}
     found = False
     for sample in samples:
         if graph_frame_time(sample.timestamp) > bucket_time:
@@ -715,11 +769,22 @@ def latest_graph_values_at_or_before(
                 continue
             values[index] = value
             found = True
-    return tuple(values) if found else None
+        for gpu_metric in sample.gpu_metrics:
+            gpu_metrics[gpu_metric.index] = gpu_metric
+            found = True
+    if not found:
+        return None
+    return GraphSampleValues(
+        metric_values=tuple(values),
+        gpu_metrics=tuple(gpu_metrics[index] for index in sorted(gpu_metrics)),
+    )
 
 
-def graph_sample_values(sample: MetricSample) -> tuple[float | None, ...]:
-    return tuple(getattr(sample, field) for field in GRAPH_METRIC_FIELDS)
+def graph_sample_values(sample: MetricSample) -> GraphSampleValues:
+    return GraphSampleValues(
+        metric_values=tuple(getattr(sample, field) for field in GRAPH_METRIC_FIELDS),
+        gpu_metrics=sample.gpu_metrics,
+    )
 
 
 def latest_graph_sample_second(samples: tuple[MetricSample, ...]) -> datetime | None:

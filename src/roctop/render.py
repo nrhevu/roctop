@@ -54,6 +54,10 @@ DRACULA_SELECTION_FG = DRACULA_FG
 SORT_MENU_SELECTION_BG = DRACULA_CYAN
 SORT_MENU_SELECTION_FG = DRACULA_BG
 GRAPH_ROWS_PER_LINE = 4
+GPU_GRAPH_HEIGHT = 15
+GPU_GRAPH_WIDE_MIN_WIDTH = 100
+FOCUSED_GPU_METRICS_ROWS = 8
+FOCUSED_GPU_METRICS_COLUMN_GAP = "        "
 PROCESS_TABLE_CHROME_ROWS = 5
 PROCESS_TABLE_COLUMN_COUNT = 9
 PROCESS_TABLE_CELL_PADDING_WIDTH = 2
@@ -190,7 +194,27 @@ def render_snapshot(
     graph_time_offset_seconds: int = 0,
 ) -> Group | PopupOverlay:
     with profile_span("render"):
-        process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state)
+        if process_state is not None and process_state.gpu_graphs_visible and history is not None:
+            base = render_gpu_metrics_graphs(
+                snapshot.gpus,
+                history,
+                end_time=graph_time or display_time,
+                samples=history_samples,
+                time_offset_seconds=graph_time_offset_seconds,
+                terminal_width=terminal_width,
+            )
+            if process_state.mode == MODE_HELP:
+                return HelpOverlay(base, process_state, terminal_height, terminal_width, snapshot.gpus)
+            if process_state.mode == MODE_PROCESS_INFO:
+                return PopupOverlay(
+                    base,
+                    lambda width: render_process_info_popup(snapshot, process_state, width),
+                    terminal_height,
+                    terminal_width,
+                )
+            return base
+
+        process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state, terminal_width)
         process_table = render_process_table(
             display_processes if display_processes is not None else snapshot.processes,
             process_state=process_state,
@@ -211,7 +235,7 @@ def render_snapshot(
                 show_subsecond_time=show_subsecond_time,
                 terminal_width=terminal_width,
             )
-            parts = [header, render_gpu_table(snapshot.gpus)]
+            parts = [header, render_gpu_table(snapshot.gpus, process_state=process_state)]
             if history is not None:
                 parts.append(
                     render_metrics_graphs(
@@ -219,6 +243,7 @@ def render_snapshot(
                         end_time=graph_time or display_time,
                         samples=history_samples,
                         time_offset_seconds=graph_time_offset_seconds,
+                        gpu_index=process_state.gpu_filter_index if process_state is not None else None,
                     )
                 )
             parts.append(process_table)
@@ -243,6 +268,7 @@ def estimate_process_view_rows(
     history: MetricsHistory | None,
     terminal_height: int | None,
     process_state: ProcessViewState | None = None,
+    terminal_width: int | None = None,
 ) -> int | None:
     if terminal_height is None:
         return None
@@ -250,7 +276,7 @@ def estimate_process_view_rows(
         used_rows = PROCESS_TABLE_CHROME_ROWS + process_inline_menu_rows(process_state)
         return max(1, terminal_height - used_rows)
     used_rows = 4
-    used_rows += len(snapshot.gpus) + 4
+    used_rows += gpu_metrics_table_rows(snapshot.gpus, process_state)
     if history is not None:
         used_rows += 13
     if process_state is not None and process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM, MODE_SEARCH, MODE_FILTER):
@@ -267,6 +293,22 @@ def process_inline_menu_rows(process_state: ProcessViewState | None) -> int:
     if process_state.mode in (MODE_SORT_MENU, MODE_KILL_CONFIRM, MODE_SEARCH, MODE_FILTER):
         return 1
     return 0
+
+
+def gpu_metrics_table_rows(gpus: Sequence[GpuInfo], process_state: ProcessViewState | None) -> int:
+    focused_gpu = focused_gpu_info(gpus, process_state)
+    if focused_gpu is None:
+        return len(gpus) + 4
+    return FOCUSED_GPU_METRICS_ROWS + 2
+
+
+def focused_gpu_info(gpus: Sequence[GpuInfo], process_state: ProcessViewState | None) -> GpuInfo | None:
+    if process_state is None or process_state.gpu_filter_index is None:
+        return None
+    for gpu in gpus:
+        if gpu.index == process_state.gpu_filter_index:
+            return gpu
+    return None
 
 
 def process_elapsed_offset_seconds(snapshot_time: datetime, display_time: datetime | None) -> int:
@@ -303,7 +345,12 @@ def render_header(
         details.append(architectures, style=DRACULA_CYAN)
     guide = Text(no_wrap=True, overflow="crop")
     if process_state is not None:
-        append_process_help(guide, snapshot.gpus, process_help_separator(terminal_width))
+        append_process_help(
+            guide,
+            snapshot.gpus,
+            process_help_separator(terminal_width),
+            process_state=process_state,
+        )
     else:
         guide.append("Ctrl-C: ", style=f"bold {DRACULA_ORANGE}")
         guide.append("quit", style=DRACULA_DIM)
@@ -331,6 +378,7 @@ def append_process_help(
     details: Text,
     gpus: Sequence[GpuInfo] | None = None,
     separator: str = " ",
+    process_state: ProcessViewState | None = None,
 ) -> None:
     gpu_keys = gpu_filter_key_label(gpus)
     leading_space = False
@@ -342,6 +390,8 @@ def append_process_help(
     append_keybinding(details, "/", "search", separator=separator)
     append_keybinding(details, "f", "filter", separator=separator)
     append_keybinding(details, "z", "zoom", separator=separator)
+    graph_label = "avg graph" if process_state is not None and process_state.gpu_graphs_visible else "graphs"
+    append_keybinding(details, "g", graph_label, separator=separator)
     append_keybinding(details, "i", "inspect", separator=separator)
     append_keybinding(details, "x", "kill", separator=separator)
     append_keybinding(details, "?", "help", separator=separator)
@@ -587,7 +637,11 @@ def process_info_parent(process_state: ProcessViewState) -> str:
     return "-"
 
 
-def render_gpu_table(gpus: list[GpuInfo]) -> Table:
+def render_gpu_table(gpus: list[GpuInfo], process_state: ProcessViewState | None = None) -> Table:
+    focused_gpu = focused_gpu_info(gpus, process_state)
+    if focused_gpu is not None:
+        return render_focused_gpu_metrics(focused_gpu)
+
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
     table.add_column("GUID", overflow="fold")
@@ -629,6 +683,103 @@ def render_gpu_table(gpus: list[GpuInfo]) -> Table:
     return table
 
 
+def render_focused_gpu_metrics(gpu: GpuInfo) -> Table:
+    metrics = focused_gpu_metrics_rows(gpu)
+    content_rows = FOCUSED_GPU_METRICS_ROWS
+    column_count = max(1, math.ceil(len(metrics) / content_rows))
+    metric_columns = focused_gpu_metric_columns(metrics, content_rows, column_count)
+    column_widths = [
+        max((len(cell.plain) for cell in column if cell.plain), default=0)
+        for column in metric_columns
+    ]
+    table = Table(
+        box=box.SQUARE,
+        expand=True,
+        show_header=False,
+        show_lines=False,
+        padding=(0, 1),
+    )
+    table.add_column()
+    for row_index in range(content_rows):
+        row = Text(no_wrap=True, overflow="ellipsis")
+        for column_index, column in enumerate(metric_columns):
+            if column_index:
+                row.append(FOCUSED_GPU_METRICS_COLUMN_GAP)
+            cell = column[row_index]
+            row.append_text(cell)
+            if column_index < column_count - 1:
+                padding = column_widths[column_index] - len(cell.plain)
+                if padding > 0:
+                    row.append(" " * padding)
+        table.add_row(row)
+    return table
+
+
+def focused_gpu_metric_columns(
+    metrics: list[tuple[str, Text]],
+    content_rows: int,
+    column_count: int,
+) -> list[list[Text]]:
+    columns: list[list[Text]] = []
+    for column_index in range(column_count):
+        column = []
+        for row_index in range(content_rows):
+            metric_index = column_index * content_rows + row_index
+            if metric_index < len(metrics):
+                label, value = metrics[metric_index]
+                column.append(focused_gpu_metric_cell(label, value))
+            else:
+                column.append(Text(""))
+        columns.append(column)
+    return columns
+
+
+def focused_gpu_metric_cell(label: str, value: Text) -> Text:
+    cell = Text(no_wrap=True, overflow="ellipsis")
+    cell.append(f"{label}: ", style=DRACULA_DIM)
+    cell.append_text(value)
+    return cell
+
+
+def focused_gpu_metrics_rows(gpu: GpuInfo) -> list[tuple[str, Text]]:
+    return [
+        ("GPU", Text(str(gpu.index), style=f"bold {DRACULA_FG}")),
+        ("Name", gpu_info_text(gpu.name)),
+        ("GUID", gpu_info_text(gpu.guid)),
+        ("Model", gpu_info_text(gpu.gpu_type)),
+        ("Architecture", gpu_info_text(gpu.gfx_version)),
+        (
+            "Temperature",
+            gpu_info_text(
+                f"{gpu.temperature_c:.0f}°C" if gpu.temperature_c is not None else "",
+                temp_style(gpu.temperature_c),
+            ),
+        ),
+        (
+            "Fan",
+            gpu_info_text(
+                percent_text(gpu.fan_percent) if gpu.fan_percent is not None else "",
+                fan_style(gpu.fan_percent, None),
+            ),
+        ),
+        ("Fan RPM", gpu_info_text(f"{gpu.fan_rpm}RPM" if gpu.fan_rpm is not None else "")),
+        ("Power", gpu_info_text(f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "", power_style(gpu.power_w))),
+        ("SCLK", gpu_info_text(format_clock(gpu.sclk_mhz), clock_style(gpu.sclk_mhz))),
+        ("MCLK", gpu_info_text(format_clock(gpu.mclk_mhz), clock_style(gpu.mclk_mhz))),
+        ("Memory Used", gpu_info_text(format_bytes_mib(gpu.memory_used_bytes), percent_style(gpu.memory_percent))),
+        ("Memory Total", gpu_info_text(format_bytes_mib(gpu.memory_total_bytes))),
+        ("Memory Usage", gpu_info_text(percent_text(gpu.memory_percent, digits=1), percent_style(gpu.memory_percent))),
+        ("Utilization", gpu_info_text(percent_text(gpu.utilization_percent, digits=1), percent_style(gpu.utilization_percent))),
+    ]
+
+
+def gpu_info_text(value: str, style: str = DRACULA_FG) -> Text:
+    text = value.strip()
+    if not text or text == "N/A":
+        return Text("N/A", style=DRACULA_DIM)
+    return Text(text, style=style)
+
+
 def summarize_gpu_models(gpus: list[GpuInfo]) -> str:
     return ", ".join(unique_non_empty(gpu.gpu_type for gpu in gpus))
 
@@ -657,12 +808,35 @@ def render_metrics_graphs(
     end_time: datetime | None = None,
     samples: Sequence[MetricSample] | None = None,
     time_offset_seconds: int = 0,
+    gpu_index: int | None = None,
 ) -> Table:
     metric_samples = tuple(samples) if samples is not None else history.samples
     live_samples = history.samples
     table = Table(box=box.SQUARE, expand=True, show_header=False, padding=(0, 1))
     table.add_column(ratio=1)
     table.add_column(ratio=1)
+    gpu_graph: object
+    if gpu_index is None:
+        gpu_graph = MetricGraphPair(
+            samples=metric_samples,
+            label_samples=live_samples,
+            end_time=end_time,
+            top_metric_name="avg_gpu_percent",
+            top_label="Avg %GPU",
+            top_style=DRACULA_ORANGE,
+            bottom_metric_name="avg_gpu_mem_percent",
+            bottom_label="Avg %GPU MEM",
+            bottom_style=DRACULA_YELLOW,
+            time_offset_seconds=time_offset_seconds,
+        )
+    else:
+        gpu_graph = GpuMetricGraph(
+            samples=metric_samples,
+            label_samples=live_samples,
+            end_time=end_time,
+            gpu_index=gpu_index,
+            time_offset_seconds=time_offset_seconds,
+        )
     table.add_row(
         MetricGraphPair(
             samples=metric_samples,
@@ -676,20 +850,131 @@ def render_metrics_graphs(
             bottom_style=DRACULA_PINK,
             time_offset_seconds=time_offset_seconds,
         ),
-        MetricGraphPair(
-            samples=metric_samples,
-            label_samples=live_samples,
-            end_time=end_time,
-            top_metric_name="avg_gpu_percent",
-            top_label="Avg %GPU",
-            top_style=DRACULA_ORANGE,
-            bottom_metric_name="avg_gpu_mem_percent",
-            bottom_label="Avg %GPU MEM",
-            bottom_style=DRACULA_YELLOW,
-            time_offset_seconds=time_offset_seconds,
-        ),
+        gpu_graph,
     )
     return table
+
+
+def render_gpu_metrics_graphs(
+    gpus: Sequence[GpuInfo],
+    history: MetricsHistory,
+    end_time: datetime | None = None,
+    samples: Sequence[MetricSample] | None = None,
+    time_offset_seconds: int = 0,
+    terminal_width: int | None = None,
+) -> Table:
+    metric_samples = tuple(samples) if samples is not None else history.samples
+    live_samples = history.samples
+    gpu_indices = sorted({gpu.index for gpu in gpus})
+    column_count = min(gpu_graph_column_count(terminal_width), max(1, len(gpu_indices)))
+    table = Table(box=box.SQUARE, expand=True, show_header=False, show_lines=True, padding=(0, 1))
+    for _ in range(column_count):
+        table.add_column(ratio=1)
+    if not gpu_indices:
+        table.add_row(Text("No GPU graph data", style=DRACULA_DIM), *[Text("") for _ in range(column_count - 1)])
+        return table
+
+    row: list[object] = []
+    for gpu_index in gpu_indices:
+        row.append(
+            GpuMetricGraph(
+                samples=metric_samples,
+                label_samples=live_samples,
+                end_time=end_time,
+                gpu_index=gpu_index,
+                time_offset_seconds=time_offset_seconds,
+            )
+        )
+        if len(row) == column_count:
+            table.add_row(*row)
+            row = []
+    if row:
+        table.add_row(*row, *[Text("") for _ in range(column_count - len(row))])
+    return table
+
+
+def gpu_graph_column_count(terminal_width: int | None = None) -> int:
+    if terminal_width is not None and terminal_width < GPU_GRAPH_WIDE_MIN_WIDTH:
+        return 1
+    return 2
+
+
+@dataclass(frozen=True, slots=True)
+class GpuMetricGraph:
+    samples: Sequence[MetricSample]
+    label_samples: Sequence[MetricSample]
+    end_time: datetime | None
+    gpu_index: int
+    time_offset_seconds: int = 0
+    height: int = GPU_GRAPH_HEIGHT
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        width = max(12, options.max_width)
+        graph_columns = width * GRAPH_COLUMNS_PER_CELL
+        util_values = gpu_metric_values_by_time(
+            self.samples,
+            self.gpu_index,
+            "utilization_percent",
+            graph_columns,
+            self.end_time,
+        )
+        mem_values = gpu_metric_values_by_time(
+            self.samples,
+            self.gpu_index,
+            "memory_percent",
+            graph_columns,
+            self.end_time,
+        )
+        graph_start = graph_data_start_index(width, self.time_offset_seconds)
+        util_values = crop_metric_values_before_graph_window(util_values, graph_start)
+        mem_values = crop_metric_values_before_graph_window(mem_values, graph_start)
+        yield gpu_metric_label(
+            self.gpu_index,
+            latest_gpu_metric_sample_value(self.label_samples, self.gpu_index, "utilization_percent"),
+            latest_gpu_metric_sample_value(self.label_samples, self.gpu_index, "memory_percent"),
+        )
+        yield from metric_graph_lines(
+            util_values,
+            width=width,
+            height=self.height,
+            style=DRACULA_ORANGE,
+            trim_empty=False,
+        )
+        yield gpu_graph_separator_line(width, offset_seconds=self.time_offset_seconds)
+        yield from reversed(
+            metric_graph_lines(
+                mem_values,
+                width=width,
+                height=self.height,
+                style=DRACULA_YELLOW,
+                trim_empty=False,
+                invert_dots=True,
+            )
+        )
+
+
+def gpu_metric_label(gpu_index: int, utilization_percent: float | None, memory_percent: float | None) -> Text:
+    text = Text(no_wrap=True, overflow="ellipsis")
+    text.append(f"GPU {gpu_index}  ", style=DRACULA_FG)
+    text.append("%GPU: ", style=DRACULA_DIM)
+    text.append(metric_value_text(utilization_percent), style=DRACULA_ORANGE if utilization_percent is not None else DRACULA_DIM)
+    text.append("  %GPU MEM: ", style=DRACULA_DIM)
+    text.append(metric_value_text(memory_percent), style=DRACULA_YELLOW if memory_percent is not None else DRACULA_DIM)
+    return text
+
+
+def metric_value_text(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return percent_text(value, digits=1)
+
+
+def gpu_graph_separator_line(width: int, offset_seconds: int = 0) -> Text:
+    chars = list(time_axis_line(width, offset_seconds=offset_seconds).plain)
+    for index, char in enumerate(chars):
+        if char == " ":
+            chars[index] = "─"
+    return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
 
 
 @dataclass(frozen=True, slots=True)
@@ -836,6 +1121,73 @@ def metric_values_by_time(
         index = seconds - 1 - offset
         totals[index] += value
         counts[index] += 1
+
+    for index, count in enumerate(counts):
+        if count:
+            values[index] = totals[index] / count
+
+    last_value: float | None = None
+    for index, value in enumerate(values):
+        if value is None:
+            values[index] = last_value
+        else:
+            last_value = value
+    return values
+
+
+def latest_gpu_metric_sample_value(
+    samples: Sequence[MetricSample],
+    gpu_index: int,
+    metric_name: str,
+    end_time: datetime | None = None,
+) -> float | None:
+    if not samples:
+        return None
+    graph_end_time = end_time or samples[-1].timestamp
+    graph_end_second = graph_end_time.replace(microsecond=0)
+    for sample in reversed(samples):
+        if sample.timestamp.replace(microsecond=0) > graph_end_second:
+            continue
+        for gpu_metric in sample.gpu_metrics:
+            if gpu_metric.index != gpu_index:
+                continue
+            value = getattr(gpu_metric, metric_name)
+            if value is not None:
+                return value
+    return None
+
+
+def gpu_metric_values_by_time(
+    samples: Sequence[MetricSample],
+    gpu_index: int,
+    metric_name: str,
+    seconds: int,
+    end_time: datetime | None = None,
+) -> list[float | None]:
+    seconds = max(1, seconds)
+    values: list[float | None] = [None] * seconds
+    if not samples:
+        return values
+    graph_end_time = end_time or samples[-1].timestamp
+    graph_end_second = graph_end_time.replace(microsecond=0)
+    totals = [0.0] * seconds
+    counts = [0] * seconds
+    for sample in samples:
+        sample_second = sample.timestamp.replace(microsecond=0)
+        offset = int((graph_end_second - sample_second).total_seconds())
+        if offset < 0:
+            continue
+        if offset >= seconds:
+            continue
+        for gpu_metric in sample.gpu_metrics:
+            if gpu_metric.index != gpu_index:
+                continue
+            value = getattr(gpu_metric, metric_name)
+            if value is None:
+                continue
+            index = seconds - 1 - offset
+            totals[index] += value
+            counts[index] += 1
 
     for index, count in enumerate(counts):
         if count:

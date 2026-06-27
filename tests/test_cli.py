@@ -482,6 +482,63 @@ class CliTests(unittest.TestCase):
         self.assertEqual(buckets[datetime(2026, 6, 22, 12, 0, 1)].avg_cpu_percent, 90.0)
         self.assertEqual(buckets[datetime(2026, 6, 22, 12, 0, 2)].avg_cpu_percent, 50.0)
 
+    def test_graph_frame_buckets_average_and_carry_per_gpu_metrics(self) -> None:
+        history = cli.MetricsHistory(max_samples=120)
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=start,
+                avg_cpu_percent=None,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+                gpu_metrics=(cli.GpuMetricSample(index=0, utilization_percent=10.0, memory_percent=20.0),),
+            )
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=start + timedelta(seconds=1, milliseconds=100),
+                avg_cpu_percent=None,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+                gpu_metrics=(
+                    cli.GpuMetricSample(index=0, utilization_percent=20.0, memory_percent=30.0),
+                    cli.GpuMetricSample(index=1, utilization_percent=50.0, memory_percent=60.0),
+                ),
+            )
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=start + timedelta(seconds=1, milliseconds=800),
+                avg_cpu_percent=None,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+                gpu_metrics=(cli.GpuMetricSample(index=0, utilization_percent=40.0, memory_percent=70.0),),
+            )
+        )
+        history.append_sample(
+            cli.MetricSample(
+                timestamp=start + timedelta(seconds=2),
+                avg_cpu_percent=None,
+                avg_mem_percent=None,
+                avg_gpu_percent=None,
+                avg_gpu_mem_percent=None,
+            )
+        )
+
+        frame = cli.capture_graph_frame(history, start + timedelta(seconds=2))
+        buckets = {sample.timestamp: sample for sample in frame.history_samples}
+
+        second_one = {metric.index: metric for metric in buckets[start + timedelta(seconds=1)].gpu_metrics}
+        second_two = {metric.index: metric for metric in buckets[start + timedelta(seconds=2)].gpu_metrics}
+        self.assertAlmostEqual(second_one[0].utilization_percent, 30.0)
+        self.assertAlmostEqual(second_one[0].memory_percent, 50.0)
+        self.assertEqual(second_one[1], cli.GpuMetricSample(index=1, utilization_percent=50.0, memory_percent=60.0))
+        self.assertEqual(second_two[0], second_one[0])
+        self.assertEqual(second_two[1], second_one[1])
+
     def test_capture_graph_frame_uses_fixed_graph_second_window(self) -> None:
         history = cli.MetricsHistory(max_samples=2000)
         start = datetime(2026, 6, 22, 12, 0, 0)
@@ -1068,6 +1125,60 @@ class CliTests(unittest.TestCase):
 
         cli.handle_key_batch(snapshot, state, [".", ".", "."], history=history, graph_frame=graph_frame)
         self.assertEqual(state.graph_view_offset_seconds, 0)
+
+        cli.handle_key_batch(snapshot, state, ["r"], history=history, graph_frame=graph_frame)
+        self.assertEqual(state.graph_view_offset_seconds, 0)
+
+    def test_handle_key_batch_pans_gpu_graph_view(self) -> None:
+        state = cli.ProcessViewState(selected_pid=1, gpu_graphs_visible=True)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 30),
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=1, args="rank-0")],
+        )
+        history = cli.MetricsHistory(max_samples=120)
+        for second in range(31):
+            history.append_sample(
+                cli.MetricSample(
+                    timestamp=datetime(2026, 6, 22, 12, 0, second),
+                    avg_cpu_percent=None,
+                    avg_mem_percent=None,
+                    avg_gpu_percent=None,
+                    avg_gpu_mem_percent=None,
+                    gpu_metrics=(cli.GpuMetricSample(index=0, utilization_percent=float(second), memory_percent=0.0),),
+                )
+            )
+        graph_frame = cli.capture_graph_frame(history, datetime(2026, 6, 22, 12, 0, 30))
+
+        cli.handle_key_batch(snapshot, state, [","], history=history, graph_frame=graph_frame)
+        self.assertEqual(state.graph_view_offset_seconds, 10)
+
+        cli.handle_key_batch(snapshot, state, ["r"], history=history, graph_frame=graph_frame)
+        self.assertEqual(state.graph_view_offset_seconds, 0)
+
+    def test_handle_key_batch_pans_focused_gpu_graph_view(self) -> None:
+        state = cli.ProcessViewState(selected_pid=1, gpu_filter_index=0)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 30),
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=1, args="rank-0")],
+        )
+        history = cli.MetricsHistory(max_samples=120)
+        for second in range(31):
+            history.append_sample(
+                cli.MetricSample(
+                    timestamp=datetime(2026, 6, 22, 12, 0, second),
+                    avg_cpu_percent=None,
+                    avg_mem_percent=None,
+                    avg_gpu_percent=None,
+                    avg_gpu_mem_percent=None,
+                    gpu_metrics=(cli.GpuMetricSample(index=0, utilization_percent=float(second), memory_percent=0.0),),
+                )
+            )
+        graph_frame = cli.capture_graph_frame(history, datetime(2026, 6, 22, 12, 0, 30))
+
+        cli.handle_key_batch(snapshot, state, [","], history=history, graph_frame=graph_frame)
+        self.assertEqual(state.graph_view_offset_seconds, 10)
 
         cli.handle_key_batch(snapshot, state, ["r"], history=history, graph_frame=graph_frame)
         self.assertEqual(state.graph_view_offset_seconds, 0)

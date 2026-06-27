@@ -18,12 +18,20 @@ class CpuTimes:
 
 
 @dataclass(frozen=True, slots=True)
+class GpuMetricSample:
+    index: int
+    utilization_percent: float | None
+    memory_percent: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class MetricSample:
     timestamp: datetime
     avg_cpu_percent: float | None
     avg_mem_percent: float | None
     avg_gpu_percent: float | None
     avg_gpu_mem_percent: float | None
+    gpu_metrics: tuple[GpuMetricSample, ...] = ()
 
 
 class MetricsHistory:
@@ -68,6 +76,7 @@ class MetricsHistory:
                 avg_mem_percent=read_mem_percent(self.meminfo_path),
                 avg_gpu_percent=average_gpu_percent(snapshot),
                 avg_gpu_mem_percent=average_gpu_mem_percent(snapshot),
+                gpu_metrics=gpu_metric_samples(snapshot),
             )
             self._samples.append(sample)
             return sample
@@ -142,6 +151,17 @@ def average_gpu_percent(snapshot: Snapshot) -> float | None:
 
 def average_gpu_mem_percent(snapshot: Snapshot) -> float | None:
     return average_percent(gpu.memory_percent for gpu in snapshot.gpus)
+
+
+def gpu_metric_samples(snapshot: Snapshot) -> tuple[GpuMetricSample, ...]:
+    return tuple(
+        GpuMetricSample(
+            index=gpu.index,
+            utilization_percent=clamp_percent(gpu.utilization_percent),
+            memory_percent=clamp_percent(gpu.memory_percent),
+        )
+        for gpu in sorted(snapshot.gpus, key=lambda gpu: gpu.index)
+    )
 
 
 def average_percent(values: Iterable[float | int | None]) -> float | None:

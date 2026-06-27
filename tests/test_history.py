@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from roctop.history import (
+    GpuMetricSample,
     MetricsHistory,
     average_gpu_mem_percent,
     average_gpu_percent,
@@ -48,6 +49,36 @@ class HistoryTests(unittest.TestCase):
         )
         self.assertAlmostEqual(average_gpu_percent(snapshot), 50.0)
         self.assertAlmostEqual(average_gpu_mem_percent(snapshot), 50.0)
+
+    def test_history_records_per_gpu_metrics_by_index(self) -> None:
+        history = MetricsHistory(stat_path="/missing/stat", meminfo_path="/missing/meminfo")
+        sample = history.add_snapshot(
+            Snapshot(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                gpus=[
+                    GpuInfo(
+                        index=2,
+                        memory_used_bytes=150,
+                        memory_total_bytes=100,
+                        utilization_percent=125,
+                    ),
+                    GpuInfo(
+                        index=0,
+                        memory_used_bytes=25,
+                        memory_total_bytes=100,
+                        utilization_percent=-5,
+                    ),
+                ],
+            )
+        )
+
+        self.assertEqual(
+            sample.gpu_metrics,
+            (
+                GpuMetricSample(index=0, utilization_percent=0.0, memory_percent=25.0),
+                GpuMetricSample(index=2, utilization_percent=100.0, memory_percent=100.0),
+            ),
+        )
 
     def test_history_reads_system_metrics_and_keeps_window(self) -> None:
         with TemporaryDirectory() as temp_dir:

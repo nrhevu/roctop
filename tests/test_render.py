@@ -10,7 +10,7 @@ from rich.text import Text
 
 import roctop.render as render
 from roctop.cli import handle_key_batch
-from roctop.history import MetricSample, MetricsHistory
+from roctop.history import GpuMetricSample, MetricSample, MetricsHistory
 from roctop.interaction import (
     KEY_DOWN,
     KEY_UP,
@@ -186,6 +186,155 @@ class RenderTests(unittest.TestCase):
         self.assertLess(output.index("%Utilization"), output.index("Avg %CPU"))
         self.assertLess(output.index("Avg %CPU"), output.index("PID"))
 
+    def test_gpu_focus_renders_selected_metrics_graph_and_processes(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(
+                    index=0,
+                    name="AMD GPU 0",
+                    guid="guid-0",
+                    memory_used_bytes=1024 * 1024 * 1024,
+                    memory_total_bytes=4 * 1024 * 1024 * 1024,
+                    utilization_percent=12,
+                ),
+                GpuInfo(
+                    index=1,
+                    name="Accelerator 1",
+                    guid="guid-1",
+                    gpu_type="AMD Instinct MI350X",
+                    gfx_version="gfx950",
+                    temperature_c=64,
+                    fan_percent=50,
+                    power_w=270,
+                    sclk_mhz=1700,
+                    mclk_mhz=2000,
+                    memory_used_bytes=3 * 1024 * 1024 * 1024,
+                    memory_total_bytes=4 * 1024 * 1024 * 1024,
+                    utilization_percent=88,
+                ),
+            ],
+            processes=[
+                ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
+                ProcessInfo(gpu_index=1, pid=456, user="demo", args="python serve.py"),
+            ],
+        )
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=37.3,
+                avg_mem_percent=77.2,
+                avg_gpu_percent=33.2,
+                avg_gpu_mem_percent=54.6,
+                gpu_metrics=(
+                    GpuMetricSample(index=0, utilization_percent=12.0, memory_percent=25.0),
+                    GpuMetricSample(index=1, utilization_percent=88.0, memory_percent=75.0),
+                ),
+            )
+        )
+        state = ProcessViewState(selected_pid=456, gpu_filter_index=1, viewport_rows=4)
+        console = Console(width=300, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, history, state, terminal_height=45, terminal_width=300))
+        output = console.export_text()
+
+        self.assertIn("GPU focus: 1", output)
+        self.assertNotIn("GPU 1 Metrics", output)
+        self.assertNotIn("Metric", output)
+        self.assertIn("GPU: 1", output)
+        self.assertIn("Name: Accelerator 1", output)
+        self.assertIn("Model: AMD Instinct MI350X", output)
+        self.assertIn("Architecture: gfx950", output)
+        self.assertIn("GUID: guid-1", output)
+        self.assertIn("Temperature: 64°C", output)
+        self.assertIn("Fan: 50%", output)
+        self.assertIn("Power:", output)
+        self.assertIn("270W", output)
+        self.assertIn("SCLK:", output)
+        self.assertIn("1700MHz", output)
+        self.assertIn("MCLK:", output)
+        self.assertIn("2000MHz", output)
+        self.assertIn("Memory Used:", output)
+        self.assertIn("Memory Total:", output)
+        self.assertIn("Memory Usage:", output)
+        self.assertIn("Utilization:", output)
+        self.assertIn("88.0%", output)
+        second_column_labels = (
+            "Power:",
+            "SCLK:",
+            "MCLK:",
+            "Memory Used:",
+            "Memory Total:",
+            "Memory Usage:",
+            "Utilization:",
+        )
+        second_column_lines = [next(line for line in output.splitlines() if label in line) for label in second_column_labels]
+        self.assertTrue(all(line.count("│") == 2 for line in second_column_lines))
+        self.assertEqual(
+            len({line.index(label) for line, label in zip(second_column_lines, second_column_labels)}),
+            1,
+        )
+        model_line = next(
+            line for line in output.splitlines() if "Model: AMD Instinct MI350X" in line and "Memory Used:" in line
+        )
+        self.assertGreaterEqual(
+            model_line.index("Memory Used:") - (model_line.index("Model:") + len("Model: AMD Instinct MI350X")),
+            8,
+        )
+        self.assertNotIn("AMD GPU 0", output)
+        self.assertNotIn("guid-0", output)
+        self.assertIn("GPU 1", output)
+        self.assertIn("%GPU: 88.0%", output)
+        self.assertIn("%GPU MEM: 75.0%", output)
+        self.assertNotIn("Avg %GPU:", output)
+        self.assertIn("python serve.py", output)
+        self.assertNotIn("python train.py", output)
+
+    def test_snapshot_can_toggle_per_gpu_graphs(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[
+                GpuInfo(index=0, memory_used_bytes=25, memory_total_bytes=100, utilization_percent=100),
+                GpuInfo(index=1, memory_used_bytes=75, memory_total_bytes=100, utilization_percent=56),
+                GpuInfo(index=2, memory_used_bytes=50, memory_total_bytes=100, utilization_percent=42),
+                GpuInfo(index=3, memory_used_bytes=10, memory_total_bytes=100, utilization_percent=24),
+            ],
+            processes=[ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py")],
+        )
+        history = MetricsHistory(max_samples=120)
+        history.append_sample(
+            MetricSample(
+                timestamp=datetime(2026, 6, 22, 12, 0, 0),
+                avg_cpu_percent=37.3,
+                avg_mem_percent=77.2,
+                avg_gpu_percent=33.2,
+                avg_gpu_mem_percent=54.6,
+                gpu_metrics=(
+                    GpuMetricSample(index=0, utilization_percent=100.0, memory_percent=100.0),
+                    GpuMetricSample(index=1, utilization_percent=56.0, memory_percent=75.0),
+                    GpuMetricSample(index=2, utilization_percent=42.0, memory_percent=50.0),
+                    GpuMetricSample(index=3, utilization_percent=24.0, memory_percent=10.0),
+                ),
+            )
+        )
+        state = ProcessViewState(gpu_filter_index=1, gpu_graphs_visible=True)
+        console = Console(width=180, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, history, state, terminal_height=45, terminal_width=180))
+        output = console.export_text()
+
+        self.assertIn("GPU 0", output)
+        self.assertIn("GPU 1", output)
+        self.assertIn("GPU 2", output)
+        self.assertIn("GPU 3", output)
+        self.assertIn("%GPU: 100.0%", output)
+        self.assertIn("%GPU MEM: 75.0%", output)
+        self.assertNotIn("g: avg graph", output)
+        self.assertNotIn("PID", output)
+        self.assertNotIn("%Utilization", output)
+        self.assertNotIn("Avg %GPU:", output)
+        self.assertGreaterEqual(sum(1 for line in output.splitlines() if has_braille_dots(line)), 8)
+        self.assertTrue(any(line.startswith("├") and "┼" in line for line in output.splitlines()))
+
     def test_header_can_render_live_subsecond_display_time(self) -> None:
         snapshot = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0))
         console = Console(width=120, record=True, file=StringIO())
@@ -222,6 +371,15 @@ class RenderTests(unittest.TestCase):
     def test_metric_graph_packs_two_time_columns_per_braille_cell(self) -> None:
         lines = metric_graph_lines([25.0, 25.0], width=1, height=4, style="green", trim_empty=False)
         self.assertEqual(lines[0].plain, "⣀")
+
+    def test_gpu_graph_separator_draws_full_width_line(self) -> None:
+        line = render.gpu_graph_separator_line(700)
+        plain = line.plain
+
+        self.assertEqual(len(plain), 700)
+        self.assertEqual(plain[0], "─")
+        self.assertIn("1080s", plain)
+        self.assertGreater(plain.count("─"), 650)
 
     def test_metric_values_follow_sample_timestamps(self) -> None:
         samples = [
@@ -848,6 +1006,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("/: search", plain)
         self.assertIn("f: filter", plain)
         self.assertIn("z: zoom", plain)
+        self.assertIn("g: graphs", plain)
         self.assertNotIn(",/. graph", plain)
         self.assertNotIn("r: live", plain)
         self.assertIn("<0-1>: gpu", plain)
@@ -856,6 +1015,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("<0-1>: gpu"), plain.index("s: sort"))
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
+        self.assertLess(plain.index("z: zoom"), plain.index("g: graphs"))
+        self.assertLess(plain.index("g: graphs"), plain.index("i: inspect"))
         self.assertLess(plain.index("i: inspect"), plain.index("x: kill"))
         self.assertLess(plain.index("i: inspect"), plain.index("?: help"))
         self.assertLess(plain.index("x: kill"), plain.index("?: help"))
@@ -891,8 +1052,9 @@ class RenderTests(unittest.TestCase):
         self.assertIn("MODE", plain)
         self.assertIn("Open help / close help", plain)
         self.assertIn("<0-3>", plain)
-        self.assertIn("Filter processes by GPU id", plain)
+        self.assertIn("Focus GPU", plain)
         self.assertIn("Zoom process table", plain)
+        self.assertIn("Toggle GPU graphs", plain)
         self.assertIn("Pan graph older/newer", plain)
         self.assertIn("Reset graph to live", plain)
         self.assertIn("j/k or Up/Down: scroll", plain)
@@ -1180,7 +1342,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("python train.py", plain)
         self.assertNotIn("python serve.py", plain)
 
-    def test_active_gpu_filter_renders_caption_and_filters_rows(self) -> None:
+    def test_active_gpu_focus_renders_caption_and_filters_rows(self) -> None:
         processes = [
             ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
             ProcessInfo(gpu_index=1, pid=456, user="demo", args="python serve.py"),
@@ -1190,7 +1352,7 @@ class RenderTests(unittest.TestCase):
         console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
         plain = console.export_text(clear=False)
         title_line = next(line for line in plain.splitlines() if "Processes  1/1" in line)
-        self.assertIn("GPU: 1", title_line)
+        self.assertIn("GPU focus: 1", title_line)
         self.assertIn("python serve.py", plain)
         self.assertNotIn("python train.py", plain)
 

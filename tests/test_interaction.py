@@ -165,6 +165,17 @@ class InteractionTests(unittest.TestCase):
         state.handle_key("h", processes)
         self.assertEqual(state.sort_menu_index, 0)
 
+    def test_g_toggles_gpu_graph_view_in_normal_mode(self) -> None:
+        state = ProcessViewState()
+        processes = [proc(100)]
+
+        result = state.handle_key("g", processes)
+        self.assertTrue(result.changed)
+        self.assertTrue(state.gpu_graphs_visible)
+
+        state.handle_key("g", processes)
+        self.assertFalse(state.gpu_graphs_visible)
+
     def test_cursor_tracks_selected_pid_after_sort_refresh(self) -> None:
         processes = [
             proc(1, cpu_percent=1.0),
@@ -652,6 +663,25 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.mode, MODE_FILTER)
         self.assertEqual(state.filter_query, "z")
         self.assertFalse(state.process_zoomed)
+
+    def test_g_remains_text_input_in_search_and_filter_modes(self) -> None:
+        processes = [proc(100, args="demo::rank-g")]
+        state = ProcessViewState(viewport_rows=3)
+
+        state.handle_key("/", processes)
+        state.handle_key("g", processes)
+
+        self.assertEqual(state.mode, MODE_SEARCH)
+        self.assertEqual(state.search_input, "g")
+        self.assertFalse(state.gpu_graphs_visible)
+
+        state.handle_key("esc", processes)
+        state.handle_key("f", processes)
+        state.handle_key("g", processes)
+
+        self.assertEqual(state.mode, MODE_FILTER)
+        self.assertEqual(state.filter_query, "g")
+        self.assertFalse(state.gpu_graphs_visible)
 
     def test_search_next_and_previous_wrap_in_sorted_order(self) -> None:
         processes = [
