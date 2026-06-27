@@ -235,6 +235,20 @@ class InteractionTests(unittest.TestCase):
 
         self.assertEqual([row.pid for row in display], [11])
 
+    def test_tree_gpu_focus_keeps_visible_parent_chain(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=1, args="init"),
+            ProcessInfo(gpu_index=None, pid=10, ppid=1, args="launcher"),
+            proc(11, gpu_index=7, ppid=10, args="gpu-7-worker"),
+            proc(12, gpu_index=6, ppid=10, args="gpu-6-worker"),
+        ]
+        state = ProcessViewState(tree_mode=True, gpu_filter_index=7, viewport_rows=4)
+
+        display = state.display_processes(processes)
+
+        self.assertEqual([row.pid for row in display], [1, 10, 11])
+        self.assertEqual([row.gpu_index for row in display], [None, None, 7])
+
     def test_tree_mode_p_jumps_to_visible_parent_process(self) -> None:
         processes = [
             ProcessInfo(gpu_index=None, pid=10, args="parent"),

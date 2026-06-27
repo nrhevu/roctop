@@ -1486,6 +1486,35 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(len(selected_lines), 1)
         self.assertIn("└─ python serve", selected_lines[0])
 
+    def test_tree_gpu_focus_renders_parent_processes(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=7, pid=12, ppid=10, user="demo", args="gpu-7-worker"),
+            ProcessInfo(gpu_index=6, pid=13, ppid=10, user="demo", args="gpu-6-worker"),
+        ]
+        ancestors = [
+            ProcessInfo(gpu_index=None, pid=1, user="root", args="init"),
+            ProcessInfo(gpu_index=None, pid=10, ppid=1, user="demo", args="launcher"),
+        ]
+        state = ProcessViewState(selected_pid=12, tree_mode=True, gpu_filter_index=7, viewport_rows=4)
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(
+            render_process_table(
+                processes,
+                process_state=state,
+                max_rows=4,
+                terminal_width=140,
+                process_ancestors=ancestors,
+            )
+        )
+
+        plain = console.export_text(clear=False)
+        self.assertIn("Process Tree  3/3", plain)
+        self.assertIn("Focus: GPU 7", plain)
+        self.assertIn("init", plain)
+        self.assertIn("launcher", plain)
+        self.assertIn("gpu-7-worker", plain)
+        self.assertNotIn("gpu-6-worker", plain)
+
     def test_tree_mode_wraps_continuation_lines_under_prefix(self) -> None:
         root = ProcessInfo(gpu_index=None, pid=1, args="init")
         parent = ProcessInfo(gpu_index=None, pid=10, ppid=1, args="launcher")

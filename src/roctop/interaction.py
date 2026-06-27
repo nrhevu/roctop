@@ -182,8 +182,20 @@ class ProcessViewState:
     ) -> list[ProcessInfo]:
         if self.tree_mode:
             rows = combine_tree_processes(processes, process_ancestors)
-            return self.tree_processes(self.filtered_processes(rows))
+            return self.tree_processes(self.filtered_tree_processes(rows))
         return self.sorted_processes(self.filtered_processes(processes))
+
+    def filtered_tree_processes(self, processes: Iterable[ProcessInfo]) -> list[ProcessInfo]:
+        rows = list(processes)
+        if self.gpu_filter_index is None:
+            return self.filtered_processes(rows)
+
+        query = self.filter_query.strip()
+        matching_rows = rows
+        if query:
+            matching_rows = [proc for proc in matching_rows if process_matches_search(proc, query)]
+        matching_rows = [proc for proc in matching_rows if proc.gpu_index == self.gpu_filter_index]
+        return include_tree_ancestors(rows, matching_rows)
 
     def sort_process_rows(self, rows: list[ProcessInfo]) -> list[ProcessInfo]:
         if self.sort_field == SORT_DEFAULT:
@@ -871,6 +883,38 @@ def combine_tree_processes(
         seen_keys.add(key)
         rows.append(proc)
     return rows
+
+
+def include_tree_ancestors(
+    rows: list[ProcessInfo],
+    target_rows: Iterable[ProcessInfo],
+) -> list[ProcessInfo]:
+    if not rows:
+        return []
+
+    rows_by_key: dict[ProcessSelectionKey, ProcessInfo] = {}
+    key_by_pid: dict[int, ProcessSelectionKey] = {}
+    for proc in rows:
+        key = process_selection_key(proc)
+        if key in rows_by_key:
+            continue
+        rows_by_key[key] = proc
+        key_by_pid.setdefault(proc.pid, key)
+
+    included_keys: set[ProcessSelectionKey] = set()
+    for proc in target_rows:
+        key = process_selection_key(proc)
+        while key in rows_by_key and key not in included_keys:
+            included_keys.add(key)
+            parent_pid = rows_by_key[key].ppid
+            if parent_pid is None:
+                break
+            parent_key = key_by_pid.get(parent_pid)
+            if parent_key is None or parent_key == key:
+                break
+            key = parent_key
+
+    return [proc for proc in rows if process_selection_key(proc) in included_keys]
 
 
 def flatten_process_tree(
