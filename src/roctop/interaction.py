@@ -698,7 +698,7 @@ class ProcessViewState:
         if self.status_message:
             parts.append(self.status_message)
         if self.gpu_filter_index is not None:
-            parts.append(f"GPU focus: {self.gpu_filter_index}")
+            parts.append(f"Focus: GPU {self.gpu_filter_index}")
         if self.filter_query.strip() and self.mode != MODE_FILTER:
             parts.append(f"Filter: {self.filter_query.strip()}")
         return "   ".join(parts)

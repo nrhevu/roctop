@@ -1183,6 +1183,52 @@ class CliTests(unittest.TestCase):
         cli.handle_key_batch(snapshot, state, ["r"], history=history, graph_frame=graph_frame)
         self.assertEqual(state.graph_view_offset_seconds, 0)
 
+    def test_focused_gpu_graph_pan_clamps_to_full_width_left_edge(self) -> None:
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        history = cli.MetricsHistory(max_samples=cli.GRAPH_HISTORY_SECONDS + 301)
+        for second in range(cli.GRAPH_HISTORY_SECONDS + 301):
+            history.append_sample(
+                cli.MetricSample(
+                    timestamp=start + timedelta(seconds=second),
+                    avg_cpu_percent=None,
+                    avg_mem_percent=None,
+                    avg_gpu_percent=None,
+                    avg_gpu_mem_percent=None,
+                    gpu_metrics=(cli.GpuMetricSample(index=0, utilization_percent=float(second % 100), memory_percent=0.0),),
+                )
+            )
+        graph_frame = cli.capture_graph_frame(history, start + timedelta(seconds=cli.GRAPH_HISTORY_SECONDS + 300))
+        snapshot = Snapshot(
+            timestamp=graph_frame.display_time,
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=1, args="rank-0")],
+        )
+        focused_state = cli.ProcessViewState(selected_pid=1, gpu_filter_index=0)
+        normal_state = cli.ProcessViewState(selected_pid=1)
+        terminal_width = 300
+        focused_max_offset = cli.graph_view_max_offset_seconds(
+            history.samples,
+            graph_frame.display_time,
+            visible_seconds=cli.graph_view_visible_seconds(terminal_width, focused_state),
+        )
+        normal_max_offset = cli.graph_view_max_offset_seconds(
+            history.samples,
+            graph_frame.display_time,
+            visible_seconds=cli.graph_view_visible_seconds(terminal_width, normal_state),
+        )
+
+        cli.handle_key_batch(
+            snapshot,
+            focused_state,
+            [","] * 200,
+            history=history,
+            graph_frame=graph_frame,
+            terminal_width=terminal_width,
+        )
+
+        self.assertLess(focused_max_offset, normal_max_offset)
+        self.assertEqual(focused_state.graph_view_offset_seconds, focused_max_offset)
+
     def test_handle_key_batch_uses_terminal_width_for_graph_pan(self) -> None:
         start = datetime(2026, 6, 22, 12, 0, 0)
         history = cli.MetricsHistory(max_samples=400)

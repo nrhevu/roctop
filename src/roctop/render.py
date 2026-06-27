@@ -383,7 +383,7 @@ def append_process_help(
     gpu_keys = gpu_filter_key_label(gpus)
     leading_space = False
     if gpu_keys:
-        append_keybinding(details, gpu_keys, "gpu", leading_space=False, separator=separator)
+        append_keybinding(details, gpu_keys, "focus", leading_space=False, separator=separator)
         leading_space = True
     append_keybinding(details, "s", "sort", leading_space=leading_space, separator=separator)
     append_keybinding(details, "t", "tree", separator=separator)
@@ -813,30 +813,21 @@ def render_metrics_graphs(
     metric_samples = tuple(samples) if samples is not None else history.samples
     live_samples = history.samples
     table = Table(box=box.SQUARE, expand=True, show_header=False, padding=(0, 1))
+    if gpu_index is not None:
+        table.add_column(ratio=1)
+        table.add_row(
+            GpuMetricGraph(
+                samples=metric_samples,
+                label_samples=live_samples,
+                end_time=end_time,
+                gpu_index=gpu_index,
+                time_offset_seconds=time_offset_seconds,
+            )
+        )
+        return table
+
     table.add_column(ratio=1)
     table.add_column(ratio=1)
-    gpu_graph: object
-    if gpu_index is None:
-        gpu_graph = MetricGraphPair(
-            samples=metric_samples,
-            label_samples=live_samples,
-            end_time=end_time,
-            top_metric_name="avg_gpu_percent",
-            top_label="Avg %GPU",
-            top_style=DRACULA_ORANGE,
-            bottom_metric_name="avg_gpu_mem_percent",
-            bottom_label="Avg %GPU MEM",
-            bottom_style=DRACULA_YELLOW,
-            time_offset_seconds=time_offset_seconds,
-        )
-    else:
-        gpu_graph = GpuMetricGraph(
-            samples=metric_samples,
-            label_samples=live_samples,
-            end_time=end_time,
-            gpu_index=gpu_index,
-            time_offset_seconds=time_offset_seconds,
-        )
     table.add_row(
         MetricGraphPair(
             samples=metric_samples,
@@ -850,7 +841,18 @@ def render_metrics_graphs(
             bottom_style=DRACULA_PINK,
             time_offset_seconds=time_offset_seconds,
         ),
-        gpu_graph,
+        MetricGraphPair(
+            samples=metric_samples,
+            label_samples=live_samples,
+            end_time=end_time,
+            top_metric_name="avg_gpu_percent",
+            top_label="Avg %GPU",
+            top_style=DRACULA_ORANGE,
+            bottom_metric_name="avg_gpu_mem_percent",
+            bottom_label="Avg %GPU MEM",
+            bottom_style=DRACULA_YELLOW,
+            time_offset_seconds=time_offset_seconds,
+        ),
     )
     return table
 
@@ -971,8 +973,9 @@ def metric_value_text(value: float | None) -> str:
 
 def gpu_graph_separator_line(width: int, offset_seconds: int = 0) -> Text:
     chars = list(time_axis_line(width, offset_seconds=offset_seconds).plain)
+    axis_start = graph_window_start_index(width, offset_seconds)
     for index, char in enumerate(chars):
-        if char == " ":
+        if index >= axis_start and char == " ":
             chars[index] = "─"
     return Text("".join(chars), style=DRACULA_DIM, no_wrap=True, overflow="crop")
 

@@ -238,7 +238,7 @@ class RenderTests(unittest.TestCase):
         console.print(render_snapshot(snapshot, history, state, terminal_height=45, terminal_width=300))
         output = console.export_text()
 
-        self.assertIn("GPU focus: 1", output)
+        self.assertIn("Focus: GPU 1", output)
         self.assertNotIn("GPU 1 Metrics", output)
         self.assertNotIn("Metric", output)
         self.assertIn("GPU: 1", output)
@@ -286,6 +286,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("GPU 1", output)
         self.assertIn("%GPU: 88.0%", output)
         self.assertIn("%GPU MEM: 75.0%", output)
+        self.assertNotIn("Avg %CPU:", output)
+        self.assertNotIn("Avg %MEM:", output)
         self.assertNotIn("Avg %GPU:", output)
         self.assertIn("python serve.py", output)
         self.assertNotIn("python train.py", output)
@@ -372,14 +374,17 @@ class RenderTests(unittest.TestCase):
         lines = metric_graph_lines([25.0, 25.0], width=1, height=4, style="green", trim_empty=False)
         self.assertEqual(lines[0].plain, "⣀")
 
-    def test_gpu_graph_separator_draws_full_width_line(self) -> None:
+    def test_gpu_graph_separator_respects_history_cap(self) -> None:
         line = render.gpu_graph_separator_line(700)
         plain = line.plain
+        axis_start = render.graph_window_start_index(700)
 
         self.assertEqual(len(plain), 700)
-        self.assertEqual(plain[0], "─")
+        self.assertEqual(plain[: axis_start - len("1080s")], " " * (axis_start - len("1080s")))
+        self.assertEqual(plain[axis_start], "├")
         self.assertIn("1080s", plain)
-        self.assertGreater(plain.count("─"), 650)
+        self.assertNotIn("─", plain[: axis_start - len("1080s")])
+        self.assertGreater(plain[axis_start:].count("─"), 500)
 
     def test_metric_values_follow_sample_timestamps(self) -> None:
         samples = [
@@ -1009,11 +1014,11 @@ class RenderTests(unittest.TestCase):
         self.assertIn("g: graphs", plain)
         self.assertNotIn(",/. graph", plain)
         self.assertNotIn("r: live", plain)
-        self.assertIn("<0-1>: gpu", plain)
+        self.assertIn("<0-1>: focus", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("i: inspect", plain)
         self.assertIn("q: quit", plain)
-        self.assertLess(plain.index("<0-1>: gpu"), plain.index("s: sort"))
+        self.assertLess(plain.index("<0-1>: focus"), plain.index("s: sort"))
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
         self.assertLess(plain.index("z: zoom"), plain.index("g: graphs"))
         self.assertLess(plain.index("g: graphs"), plain.index("i: inspect"))
@@ -1026,7 +1031,7 @@ class RenderTests(unittest.TestCase):
         wide_console = Console(width=120, record=True, file=StringIO())
         wide_console.print(render_snapshot(snapshot, process_state=state, terminal_height=40, terminal_width=120))
         wide_plain = wide_console.export_text(clear=False)
-        self.assertIn("<0-1>: gpu  s: sort", wide_plain)
+        self.assertIn("<0-1>: focus  s: sort", wide_plain)
 
     def test_help_popup_overlays_process_table_without_reserving_rows(self) -> None:
         snapshot = Snapshot(
@@ -1352,7 +1357,7 @@ class RenderTests(unittest.TestCase):
         console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
         plain = console.export_text(clear=False)
         title_line = next(line for line in plain.splitlines() if "Processes  1/1" in line)
-        self.assertIn("GPU focus: 1", title_line)
+        self.assertIn("Focus: GPU 1", title_line)
         self.assertIn("python serve.py", plain)
         self.assertNotIn("python train.py", plain)
 

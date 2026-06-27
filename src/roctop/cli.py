@@ -35,7 +35,7 @@ from .interaction import (
 )
 from .models import ProcessInfo, Snapshot
 from .profiling import profile_span
-from .render import GRAPH_COLUMNS_PER_CELL, GRAPH_HISTORY_SECONDS, render_snapshot
+from .render import GRAPH_COLUMNS_PER_CELL, GRAPH_HISTORY_SECONDS, GPU_GRAPH_WIDE_MIN_WIDTH, render_snapshot
 
 
 KEY_POLL_SECONDS = 0.05
@@ -415,7 +415,7 @@ def handle_graph_pan_key(
     max_offset = graph_view_max_offset_seconds(
         samples,
         graph_frame.display_time,
-        visible_seconds=graph_view_visible_seconds(terminal_width),
+        visible_seconds=graph_view_visible_seconds(terminal_width, process_state),
     )
     current = min(max(0, process_state.graph_view_offset_seconds), max_offset)
     if key == ",":
@@ -561,7 +561,7 @@ def display_graph_frame(
         process_state.graph_view_offset_seconds,
         history.samples,
         live_frame.display_time,
-        visible_seconds=graph_view_visible_seconds(terminal_width),
+        visible_seconds=graph_view_visible_seconds(terminal_width, process_state),
     )
     process_state.graph_view_offset_seconds = offset_seconds
     if offset_seconds <= 0:
@@ -604,11 +604,23 @@ def graph_view_max_offset_seconds(
     )
 
 
-def graph_view_visible_seconds(terminal_width: int | None) -> int | None:
+def graph_view_visible_seconds(
+    terminal_width: int | None,
+    process_state: ProcessViewState | None = None,
+) -> int | None:
     if terminal_width is None:
         return None
-    graph_width = max(12, (max(1, terminal_width) - 2) // 2 - 2)
+    graph_width = graph_view_width(terminal_width, process_state)
     return min(GRAPH_HISTORY_BUCKETS, graph_width * GRAPH_COLUMNS_PER_CELL)
+
+
+def graph_view_width(terminal_width: int, process_state: ProcessViewState | None = None) -> int:
+    width = max(1, terminal_width)
+    if process_state is not None and process_state.gpu_filter_index is not None and not process_state.gpu_graphs_visible:
+        return max(12, width - 4)
+    if process_state is not None and process_state.gpu_graphs_visible and width < GPU_GRAPH_WIDE_MIN_WIDTH:
+        return max(12, width - 4)
+    return max(12, (width - 2) // 2 - 2)
 
 
 def graph_history_sample_limit(interval: float) -> int:
