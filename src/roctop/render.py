@@ -801,7 +801,6 @@ def focused_gpu_metrics_rows(
         ("Power", gpu_info_text(f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "", power_style(gpu.power_w))),
         ("Max Power", gpu_info_text(f"{gpu.max_power_w:.0f}W" if gpu.max_power_w is not None else "", power_style(gpu.max_power_w))),
         ("Perf", gpu_info_text(gpu.performance_level)),
-        ("Throttle", gpu_info_text(gpu.throttle_status, throttle_style(gpu.throttle_status))),
         ("Voltage", gpu_info_text(f"{gpu.voltage_mv:.0f}mV" if gpu.voltage_mv is not None else "")),
         ("SCLK", gpu_info_text(format_clock(gpu.sclk_mhz), clock_style(gpu.sclk_mhz))),
         ("MCLK", gpu_info_text(format_clock(gpu.mclk_mhz), clock_style(gpu.mclk_mhz))),
@@ -864,15 +863,6 @@ def gpu_info_text(value: str, style: str = DRACULA_FG) -> Text:
     if not text or text == "N/A":
         return Text("N/A", style=DRACULA_DIM)
     return Text(text, style=style)
-
-
-def throttle_style(value: str) -> str:
-    text = value.strip().lower()
-    if not text or text in ("n/a", "none", "no", "false", "0"):
-        return DRACULA_DIM
-    if text in ("normal", "not throttled", "off", "disabled"):
-        return DRACULA_GREEN
-    return f"bold {DRACULA_ORANGE}"
 
 
 def summarize_gpu_models(gpus: list[GpuInfo]) -> str:

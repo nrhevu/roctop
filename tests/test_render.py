@@ -290,7 +290,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("270W", output)
         self.assertIn("Max Power: 300W", output)
         self.assertIn("Perf: auto", output)
-        self.assertIn("Throttle: THERMAL", output)
+        self.assertNotIn("Throttle:", output)
+        self.assertNotIn("THERMAL", output)
         self.assertIn("Voltage: 1138mV", output)
         self.assertIn("SCLK:", output)
         self.assertIn("1700MHz", output)
@@ -325,16 +326,16 @@ class RenderTests(unittest.TestCase):
                 "GPU: 1" in line
                 and "VBIOS:" in line
                 and "Perf:" in line
-                and "Memory Usage:" in line
-                and "Top Proc PID:" in line
+                and "Memory Free %:" in line
+                and "Top Proc User:" in line
                 for line in focused_metric_lines
             )
         )
         model_line = next(
-            line for line in output.splitlines() if "Model: AMD Instinct MI350X" in line and "Memory Used:" in line
+            line for line in output.splitlines() if "Model: AMD Instinct MI350X" in line and "Memory Free:" in line
         )
         self.assertGreaterEqual(
-            model_line.index("Memory Used:") - (model_line.index("Model:") + len("Model: AMD Instinct MI350X")),
+            model_line.index("Memory Free:") - (model_line.index("Model:") + len("Model: AMD Instinct MI350X")),
             8,
         )
         self.assertNotIn("AMD GPU 0", output)
