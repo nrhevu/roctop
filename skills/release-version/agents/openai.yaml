@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Version"
+  short_description: "Bump, commit, tag, and draft releases"
+  default_prompt: "Use $release-version to release version vX.Y.Z."
