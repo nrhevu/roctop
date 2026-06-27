@@ -4,7 +4,7 @@ import math
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from rich import box
 from rich.console import Console, ConsoleOptions, Group, RenderResult
@@ -235,7 +235,7 @@ def render_snapshot(
                 show_subsecond_time=show_subsecond_time,
                 terminal_width=terminal_width,
             )
-            parts = [header, render_gpu_table(snapshot.gpus, process_state=process_state)]
+            parts = [header, render_gpu_table(snapshot.gpus, process_state=process_state, processes=snapshot.processes)]
             if history is not None:
                 parts.append(
                     render_metrics_graphs(
@@ -637,10 +637,14 @@ def process_info_parent(process_state: ProcessViewState) -> str:
     return "-"
 
 
-def render_gpu_table(gpus: list[GpuInfo], process_state: ProcessViewState | None = None) -> Table:
+def render_gpu_table(
+    gpus: list[GpuInfo],
+    process_state: ProcessViewState | None = None,
+    processes: Sequence[ProcessInfo] = (),
+) -> Table:
     focused_gpu = focused_gpu_info(gpus, process_state)
     if focused_gpu is not None:
-        return render_focused_gpu_metrics(focused_gpu)
+        return render_focused_gpu_metrics(focused_gpu, processes)
 
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
@@ -683,8 +687,8 @@ def render_gpu_table(gpus: list[GpuInfo], process_state: ProcessViewState | None
     return table
 
 
-def render_focused_gpu_metrics(gpu: GpuInfo) -> Table:
-    metrics = focused_gpu_metrics_rows(gpu)
+def render_focused_gpu_metrics(gpu: GpuInfo, processes: Sequence[ProcessInfo] = ()) -> Table:
+    metrics = focused_gpu_metrics_rows(gpu, processes)
     content_rows = FOCUSED_GPU_METRICS_ROWS
     column_count = max(1, math.ceil(len(metrics) / content_rows))
     metric_columns = focused_gpu_metric_columns(metrics, content_rows, column_count)
@@ -741,7 +745,15 @@ def focused_gpu_metric_cell(label: str, value: Text) -> Text:
     return cell
 
 
-def focused_gpu_metrics_rows(gpu: GpuInfo) -> list[tuple[str, Text]]:
+def focused_gpu_metrics_rows(gpu: GpuInfo, processes: Sequence[ProcessInfo] = ()) -> list[tuple[str, Text]]:
+    gpu_processes = [proc for proc in processes if proc.gpu_index == gpu.index]
+    top_gpu_process = max(gpu_processes, key=lambda proc: proc.gpu_memory_bytes, default=None)
+    memory_free_bytes = max(0, gpu.memory_total_bytes - gpu.memory_used_bytes)
+    memory_free_percent = max(0.0, 100.0 - gpu.memory_percent)
+    process_gpu_memory_bytes = sum(proc.gpu_memory_bytes for proc in gpu_processes)
+    process_gpu_memory_percent = sum(proc.gpu_memory_percent for proc in gpu_processes)
+    process_cpu_percent = sum_optional_percent(proc.cpu_percent for proc in gpu_processes)
+    process_host_mem_percent = sum_optional_percent(proc.host_mem_percent for proc in gpu_processes)
     return [
         ("GPU", Text(str(gpu.index), style=f"bold {DRACULA_FG}")),
         ("Name", gpu_info_text(gpu.name)),
@@ -767,10 +779,57 @@ def focused_gpu_metrics_rows(gpu: GpuInfo) -> list[tuple[str, Text]]:
         ("SCLK", gpu_info_text(format_clock(gpu.sclk_mhz), clock_style(gpu.sclk_mhz))),
         ("MCLK", gpu_info_text(format_clock(gpu.mclk_mhz), clock_style(gpu.mclk_mhz))),
         ("Memory Used", gpu_info_text(format_bytes_mib(gpu.memory_used_bytes), percent_style(gpu.memory_percent))),
+        ("Memory Free", gpu_info_text(format_bytes_mib(memory_free_bytes), percent_style(memory_free_percent))),
         ("Memory Total", gpu_info_text(format_bytes_mib(gpu.memory_total_bytes))),
         ("Memory Usage", gpu_info_text(percent_text(gpu.memory_percent, digits=1), percent_style(gpu.memory_percent))),
+        ("Memory Free %", gpu_info_text(percent_text(memory_free_percent, digits=1), percent_style(memory_free_percent))),
         ("Utilization", gpu_info_text(percent_text(gpu.utilization_percent, digits=1), percent_style(gpu.utilization_percent))),
+        ("Processes", Text(str(len(gpu_processes)), style=DRACULA_FG)),
+        (
+            "Proc GPU Mem",
+            gpu_info_text(format_bytes_mib(process_gpu_memory_bytes), percent_style(process_gpu_memory_percent)),
+        ),
+        (
+            "Proc GPU Mem %",
+            gpu_info_text(percent_text(process_gpu_memory_percent, digits=1), percent_style(process_gpu_memory_percent)),
+        ),
+        ("Proc CPU", optional_percent_text(process_cpu_percent)),
+        ("Proc Host MEM", optional_percent_text(process_host_mem_percent)),
+        ("Top Proc PID", Text("-" if top_gpu_process is None else str(top_gpu_process.pid), style=DRACULA_FG)),
+        ("Top Proc User", gpu_info_text(top_gpu_process.user if top_gpu_process is not None else "")),
+        (
+            "Top Proc Mem",
+            gpu_info_text(
+                top_process_gpu_memory(top_gpu_process),
+                percent_style(top_gpu_process.gpu_memory_percent if top_gpu_process is not None else None),
+            ),
+        ),
+        ("Top Proc Time", gpu_info_text(top_gpu_process.elapsed if top_gpu_process is not None else "")),
+        ("Top Proc Cmd", gpu_info_text(process_command(top_gpu_process) if top_gpu_process is not None else "")),
     ]
+
+
+def sum_optional_percent(values: Iterable[float | None]) -> float | None:
+    found = False
+    total = 0.0
+    for value in values:
+        if value is None:
+            continue
+        found = True
+        total += value
+    return total if found else None
+
+
+def optional_percent_text(value: float | None) -> Text:
+    if value is None:
+        return Text("N/A", style=DRACULA_DIM)
+    return Text(percent_text(value, digits=1), style=percent_style(value))
+
+
+def top_process_gpu_memory(proc: ProcessInfo | None) -> str:
+    if proc is None:
+        return ""
+    return f"{format_bytes_mib(proc.gpu_memory_bytes)} ({percent_text(proc.gpu_memory_percent, digits=1)})"
 
 
 def gpu_info_text(value: str, style: str = DRACULA_FG) -> Text:

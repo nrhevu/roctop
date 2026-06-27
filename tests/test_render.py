@@ -216,7 +216,28 @@ class RenderTests(unittest.TestCase):
             ],
             processes=[
                 ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
-                ProcessInfo(gpu_index=1, pid=456, user="demo", args="python serve.py"),
+                ProcessInfo(
+                    gpu_index=1,
+                    pid=456,
+                    user="demo",
+                    cpu_percent=21.5,
+                    host_mem_percent=3.3,
+                    gpu_memory_bytes=512 * 1024 * 1024,
+                    gpu_memory_percent=12.5,
+                    elapsed="02:03",
+                    args="python serve.py",
+                ),
+                ProcessInfo(
+                    gpu_index=1,
+                    pid=457,
+                    user="worker",
+                    cpu_percent=1.5,
+                    host_mem_percent=0.7,
+                    gpu_memory_bytes=1024 * 1024 * 1024,
+                    gpu_memory_percent=25.0,
+                    elapsed="04:05",
+                    args="worker --rank 1",
+                ),
             ],
         )
         history = MetricsHistory(max_samples=120)
@@ -255,18 +276,32 @@ class RenderTests(unittest.TestCase):
         self.assertIn("MCLK:", output)
         self.assertIn("2000MHz", output)
         self.assertIn("Memory Used:", output)
+        self.assertIn("Memory Free:", output)
         self.assertIn("Memory Total:", output)
         self.assertIn("Memory Usage:", output)
+        self.assertIn("Memory Free %:", output)
         self.assertIn("Utilization:", output)
         self.assertIn("88.0%", output)
+        self.assertIn("Processes: 2", output)
+        self.assertIn("Proc GPU Mem:", output)
+        self.assertIn("1.50GiB", output)
+        self.assertIn("Proc GPU Mem %: 37.5%", output)
+        self.assertIn("Proc CPU: 23.0%", output)
+        self.assertIn("Proc Host MEM: 4.0%", output)
+        self.assertIn("Top Proc PID: 457", output)
+        self.assertIn("Top Proc User: worker", output)
+        self.assertIn("Top Proc Mem: 1.00GiB (25.0%)", output)
+        self.assertIn("Top Proc Time: 04:05", output)
+        self.assertIn("Top Proc Cmd: worker --rank 1", output)
         second_column_labels = (
             "Power:",
             "SCLK:",
             "MCLK:",
             "Memory Used:",
+            "Memory Free:",
             "Memory Total:",
             "Memory Usage:",
-            "Utilization:",
+            "Memory Free %:",
         )
         second_column_lines = [next(line for line in output.splitlines() if label in line) for label in second_column_labels]
         self.assertTrue(all(line.count("│") == 2 for line in second_column_lines))
