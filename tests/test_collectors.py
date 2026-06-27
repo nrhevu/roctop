@@ -16,6 +16,7 @@ from roctop.collectors import (
     load_json_from_text,
     merge_process_sources,
     parse_amd_pci_models,
+    parse_amd_smi_gpu_json,
     parse_amd_smi_process_json,
     parse_rocm_smi_json,
     read_ps_rows,
@@ -28,6 +29,7 @@ from roctop.models import ProcessInfo
 class CollectorTests(unittest.TestCase):
     def setUp(self) -> None:
         collectors._amd_smi_process_backoff_until = 0.0
+        collectors._amd_smi_gpu_detail_backoff_until = 0.0
         collectors._ps_row_cache.clear()
 
     def test_load_json_from_text_skips_warning_prefix(self) -> None:
@@ -116,8 +118,10 @@ class CollectorTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
-            if args[0] == "amd-smi":
+            if args == collectors.AMD_SMI_PROCESS_ARGS:
                 raise CommandTimeout("Command timed out: amd-smi process")
+            if args[0] == "amd-smi":
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
             return CommandResult(args=args, returncode=1, stdout="", stderr="")
 
         with patch("roctop.collectors.run_command", side_effect=fake_run_command):
@@ -127,7 +131,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(snapshot.processes[0].command, "demo-worker")
         self.assertEqual(snapshot.processes[0].gpu_index, 0)
         self.assertEqual(snapshot.processes[0].gpu_memory_percent, 25.0)
-        amd_calls = [(args, timeout) for args, timeout in calls if args[0] == "amd-smi"]
+        amd_calls = [(args, timeout) for args, timeout in calls if args == collectors.AMD_SMI_PROCESS_ARGS]
         self.assertEqual(len(amd_calls), 1)
         self.assertEqual(amd_calls[0][1], collectors.AMD_SMI_PROCESS_TIMEOUT_SECONDS)
 
@@ -143,9 +147,11 @@ class CollectorTests(unittest.TestCase):
                     stdout='{"system": {"PID42": "demo-worker, 0, 1048576, 0, 0"}}',
                     stderr="",
                 )
-            if args[0] == "amd-smi":
+            if args == collectors.AMD_SMI_PROCESS_ARGS:
                 amd_calls += 1
                 raise CommandTimeout("Command timed out: amd-smi process")
+            if args[0] == "amd-smi":
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
             return CommandResult(args=args, returncode=1, stdout="", stderr="")
 
         with patch("roctop.collectors.run_command", side_effect=fake_run_command):
@@ -309,7 +315,7 @@ class CollectorTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
-            if args[0] == "amd-smi":
+            if args == collectors.AMD_SMI_PROCESS_ARGS:
                 return CommandResult(
                     args=args,
                     returncode=0,
@@ -319,6 +325,8 @@ class CollectorTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            if args[0] == "amd-smi":
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
             if args[0] == "ps":
                 pids = args[-1]
                 rows = {
@@ -341,6 +349,65 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual([proc.pid for proc in snapshot.process_ancestors], [7, 1])
         self.assertEqual(snapshot.process_ancestors[0].ppid, 1)
         self.assertEqual(snapshot.process_ancestors[1].ppid, None)
+
+    def test_collect_snapshot_merges_amd_smi_gpu_details(self) -> None:
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            if args[0] == "rocm-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '{"card0": {"Card Model": "0x75b0", "GFX Version": "gfx950", '
+                        '"GUID": "29921", "VRAM Total Memory (B)": "308902100992"}, '
+                        '"system": {}}'
+                    ),
+                    stderr="",
+                )
+            if args == collectors.AMD_SMI_GPU_DETAIL_ARGS[0]:
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '[{"gpu": 0, "asic": {"market_name": "AMD Radeon Graphics", '
+                        '"vendor": {"name": "Advanced Micro Devices, Inc. [AMD/ATI]"}, '
+                        '"unique_id": "gpu-unique-0"}, "vbios": {"version": "113-D7020100-100"}, '
+                        '"bus": {"bdf": "0000:03:00.0"}, "board": {"sku": "APM107573"}, '
+                        '"limit": {"max_power": {"value": "300", "unit": "W"}}, '
+                        '"driver": {"version": "6.14.14"}}]'
+                    ),
+                    stderr="",
+                )
+            if args == collectors.AMD_SMI_GPU_DETAIL_ARGS[1]:
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '[{"gpu_id": 0, "perf": {"performance_level": "auto"}, '
+                        '"throttle": {"status": "THERMAL"}, "voltage": {"gfx_voltage": "1138mV"}}]'
+                    ),
+                    stderr="",
+                )
+            if args == collectors.AMD_SMI_PROCESS_ARGS:
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            snapshot = collect_snapshot()
+
+        self.assertEqual(snapshot.driver_version, "6.14.14")
+        self.assertEqual(len(snapshot.gpus), 1)
+        gpu = snapshot.gpus[0]
+        self.assertEqual(gpu.name, "AMD Radeon Graphics")
+        self.assertEqual(gpu.gpu_type, "AMD Instinct MI350X")
+        self.assertEqual(gpu.vendor, "Advanced Micro Devices, Inc. [AMD/ATI]")
+        self.assertEqual(gpu.unique_id, "gpu-unique-0")
+        self.assertEqual(gpu.sku, "APM107573")
+        self.assertEqual(gpu.vbios_version, "113-D7020100-100")
+        self.assertEqual(gpu.pcie_bus, "0000:03:00.0")
+        self.assertEqual(gpu.max_power_w, 300.0)
+        self.assertEqual(gpu.performance_level, "auto")
+        self.assertEqual(gpu.throttle_status, "THERMAL")
+        self.assertEqual(gpu.voltage_mv, 1138.0)
 
     def test_collect_process_ancestors_dedupes_and_skips_missing_parents(self) -> None:
         calls: list[list[int]] = []
@@ -383,9 +450,19 @@ class CollectorTests(unittest.TestCase):
                 "GPU use (%)": "99",
                 "VRAM Total Memory (B)": "308902100992",
                 "VRAM Total Used Memory (B)": "200804560896",
+                "Card Series": "AMD MI350X",
                 "Card Model": "0x75b0",
+                "Card Vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+                "Card SKU": "APM107573",
                 "GUID": "29921",
                 "GFX Version": "gfx950",
+                "VBIOS Version": "113-D7020100-100",
+                "PCIe Bus": "0000:03:00.0",
+                "Max Graphics Package Power (W)": "300",
+                "Performance Level": "auto",
+                "Throttling Status": "THERMAL",
+                "Voltage (mV)": "1138",
+                "Unique ID": "gpu-unique-0",
             },
             "system": {
                 "Driver version": "6.14.14",
@@ -399,6 +476,15 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].index, 0)
         self.assertEqual(gpus[0].guid, "29921")
         self.assertEqual(gpus[0].gpu_type, "AMD Instinct MI350X")
+        self.assertEqual(gpus[0].vendor, "Advanced Micro Devices, Inc. [AMD/ATI]")
+        self.assertEqual(gpus[0].sku, "APM107573")
+        self.assertEqual(gpus[0].vbios_version, "113-D7020100-100")
+        self.assertEqual(gpus[0].pcie_bus, "0000:03:00.0")
+        self.assertEqual(gpus[0].max_power_w, 300.0)
+        self.assertEqual(gpus[0].performance_level, "auto")
+        self.assertEqual(gpus[0].throttle_status, "THERMAL")
+        self.assertEqual(gpus[0].voltage_mv, 1138.0)
+        self.assertEqual(gpus[0].unique_id, "gpu-unique-0")
         self.assertEqual(gpus[0].utilization_percent, 99)
         self.assertEqual(gpus[0].fan_percent, 42.0)
         self.assertEqual(gpus[0].fan_rpm, 3200)
@@ -413,6 +499,58 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(processes[1].gpu_index, 0)
         self.assertEqual(processes[1].gpu_memory_bytes, 0)
 
+    def test_parse_amd_smi_gpu_json_reads_nested_gpu_details(self) -> None:
+        gpus = parse_amd_smi_gpu_json(
+            {
+                "gpu_data": [
+                    {
+                        "GPU ID": "GPU 0",
+                        "asic": {
+                            "market_name": "AMD Radeon Graphics",
+                            "vendor": {"name": "Advanced Micro Devices, Inc. [AMD/ATI]"},
+                            "gfx": "gfx1201",
+                            "device_id": "0x75b0",
+                            "unique_id": "gpu-unique-0",
+                        },
+                        "vbios": {"version": "113-D7020100-100"},
+                        "bus": {"bdf": "0000:03:00.0"},
+                        "board": {"sku": "APM107573"},
+                        "limit": {"max_power": {"value": "300", "unit": "W"}},
+                        "perf": {"performance_level": "auto"},
+                        "throttle": {"status": "THERMAL"},
+                        "voltage": {"gfx_voltage": "1138 mV"},
+                        "metric": {
+                            "current_gfxclk": "159MHz",
+                            "current_uclk": "2000MHz",
+                            "gpu_utilization": "12.5%",
+                            "vram_used": {"value": "296", "unit": "MiB"},
+                            "vram_total": {"value": "287.7", "unit": "GiB"},
+                        },
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(len(gpus), 1)
+        self.assertEqual(gpus[0].index, 0)
+        self.assertEqual(gpus[0].name, "AMD Radeon Graphics")
+        self.assertEqual(gpus[0].gpu_type, "AMD Radeon Graphics")
+        self.assertEqual(gpus[0].gfx_version, "gfx1201")
+        self.assertEqual(gpus[0].vendor, "Advanced Micro Devices, Inc. [AMD/ATI]")
+        self.assertEqual(gpus[0].unique_id, "gpu-unique-0")
+        self.assertEqual(gpus[0].sku, "APM107573")
+        self.assertEqual(gpus[0].vbios_version, "113-D7020100-100")
+        self.assertEqual(gpus[0].pcie_bus, "0000:03:00.0")
+        self.assertEqual(gpus[0].max_power_w, 300.0)
+        self.assertEqual(gpus[0].performance_level, "auto")
+        self.assertEqual(gpus[0].throttle_status, "THERMAL")
+        self.assertEqual(gpus[0].voltage_mv, 1138.0)
+        self.assertEqual(gpus[0].sclk_mhz, 159)
+        self.assertEqual(gpus[0].mclk_mhz, 2000)
+        self.assertEqual(gpus[0].memory_used_bytes, 296 * 1024**2)
+        self.assertEqual(gpus[0].memory_total_bytes, int(287.7 * 1024**3))
+        self.assertEqual(gpus[0].utilization_percent, 12.5)
+
     def test_parse_rocm_smi_json_sets_fallback_process_memory_percent(self) -> None:
         gpus, processes, _driver = parse_rocm_smi_json(
             {
@@ -424,6 +562,19 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].index, 0)
         self.assertEqual(processes[0].gpu_index, 0)
         self.assertEqual(processes[0].gpu_memory_percent, 25.0)
+
+    def test_parse_rocm_smi_json_reads_metric_detail_aliases(self) -> None:
+        gpus, _processes, _driver = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "indep_throttle_status": "THERMAL",
+                    "voltage_gfx (mV)": "1138",
+                }
+            }
+        )
+
+        self.assertEqual(gpus[0].throttle_status, "THERMAL")
+        self.assertEqual(gpus[0].voltage_mv, 1138.0)
 
     def test_parse_rocm_smi_json_treats_unsupported_optional_floats_as_missing(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(

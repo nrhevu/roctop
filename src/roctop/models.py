@@ -12,6 +12,15 @@ class GpuInfo:
     guid: str = ""
     gpu_type: str = ""
     gfx_version: str = ""
+    vendor: str = ""
+    vbios_version: str = ""
+    pcie_bus: str = ""
+    max_power_w: float | None = None
+    performance_level: str = ""
+    throttle_status: str = ""
+    voltage_mv: float | None = None
+    unique_id: str = ""
+    sku: str = ""
     temperature_c: float | None = None
     fan_percent: float | None = None
     fan_rpm: int | None = None

@@ -134,6 +134,7 @@ class RenderTests(unittest.TestCase):
     def test_snapshot_renders_history_graphs_between_tables(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            driver_version="6.14.14",
             gpus=[
                 GpuInfo(
                     index=0,
@@ -189,6 +190,7 @@ class RenderTests(unittest.TestCase):
     def test_gpu_focus_renders_selected_metrics_graph_and_processes(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            driver_version="6.14.14",
             gpus=[
                 GpuInfo(
                     index=0,
@@ -204,6 +206,15 @@ class RenderTests(unittest.TestCase):
                     guid="guid-1",
                     gpu_type="AMD Instinct MI350X",
                     gfx_version="gfx950",
+                    vendor="Advanced Micro Devices, Inc. [AMD/ATI]",
+                    vbios_version="113-D7020100-100",
+                    pcie_bus="0000:03:00.0",
+                    max_power_w=300,
+                    performance_level="auto",
+                    throttle_status="THERMAL",
+                    voltage_mv=1138,
+                    unique_id="gpu-unique-1",
+                    sku="APM107573",
                     temperature_c=64,
                     fan_percent=50,
                     power_w=270,
@@ -264,13 +275,23 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Metric", output)
         self.assertIn("GPU: 1", output)
         self.assertIn("Name: Accelerator 1", output)
+        self.assertIn("Vendor: Advanced Micro Devices, Inc. [AMD/ATI]", output)
         self.assertIn("Model: AMD Instinct MI350X", output)
+        self.assertIn("SKU: APM107573", output)
         self.assertIn("Architecture: gfx950", output)
         self.assertIn("GUID: guid-1", output)
+        self.assertIn("Unique ID: gpu-unique-1", output)
+        self.assertIn("VBIOS: 113-D7020100-100", output)
+        self.assertIn("Driver: 6.14.14", output)
+        self.assertIn("PCIe: 0000:03:00.0", output)
         self.assertIn("Temperature: 64°C", output)
         self.assertIn("Fan: 50%", output)
         self.assertIn("Power:", output)
         self.assertIn("270W", output)
+        self.assertIn("Max Power: 300W", output)
+        self.assertIn("Perf: auto", output)
+        self.assertIn("Throttle: THERMAL", output)
+        self.assertIn("Voltage: 1138mV", output)
         self.assertIn("SCLK:", output)
         self.assertIn("1700MHz", output)
         self.assertIn("MCLK:", output)
@@ -293,21 +314,21 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Top Proc Mem: 1.00GiB (25.0%)", output)
         self.assertIn("Top Proc Time: 04:05", output)
         self.assertIn("Top Proc Cmd: worker --rank 1", output)
-        second_column_labels = (
-            "Power:",
-            "SCLK:",
-            "MCLK:",
-            "Memory Used:",
-            "Memory Free:",
-            "Memory Total:",
-            "Memory Usage:",
-            "Memory Free %:",
-        )
-        second_column_lines = [next(line for line in output.splitlines() if label in line) for label in second_column_labels]
-        self.assertTrue(all(line.count("│") == 2 for line in second_column_lines))
-        self.assertEqual(
-            len({line.index(label) for line, label in zip(second_column_lines, second_column_labels)}),
-            1,
+        focused_metric_lines = [
+            line
+            for line in output.splitlines()
+            if any(label in line for label in ("GPU: 1", "Name:", "Vendor:", "GUID:", "Unique ID:"))
+        ]
+        self.assertTrue(all(line.count("│") == 2 for line in focused_metric_lines))
+        self.assertTrue(
+            any(
+                "GPU: 1" in line
+                and "VBIOS:" in line
+                and "Perf:" in line
+                and "Memory Usage:" in line
+                and "Top Proc PID:" in line
+                for line in focused_metric_lines
+            )
         )
         model_line = next(
             line for line in output.splitlines() if "Model: AMD Instinct MI350X" in line and "Memory Used:" in line

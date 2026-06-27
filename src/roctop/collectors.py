@@ -21,7 +21,12 @@ from .profiling import profile_span
 
 ROCM_SMI_ARGS = [
     "rocm-smi",
+    "--showid",
     "--showproductname",
+    "--showvbios",
+    "--showserial",
+    "--showuniqueid",
+    "--showbus",
     "--showuse",
     "--showmeminfo",
     "vram",
@@ -29,15 +34,25 @@ ROCM_SMI_ARGS = [
     "--showfan",
     "--showclocks",
     "--showpower",
+    "--showmaxpower",
+    "--showperflevel",
+    "--showvoltage",
+    "--showmetrics",
     "--showpids",
     "--showdriverversion",
     "--json",
 ]
 
 AMD_SMI_PROCESS_ARGS = ["amd-smi", "process", "-G", "--json"]
+AMD_SMI_GPU_DETAIL_ARGS = (
+    ["amd-smi", "static", "--json"],
+    ["amd-smi", "metric", "--json"],
+)
 ROCM_SMI_TIMEOUT_SECONDS = 15.0
 AMD_SMI_PROCESS_TIMEOUT_SECONDS = 1.5
 AMD_SMI_PROCESS_BACKOFF_SECONDS = 10.0
+AMD_SMI_GPU_DETAIL_TIMEOUT_SECONDS = 1.5
+AMD_SMI_GPU_DETAIL_BACKOFF_SECONDS = 10.0
 PS_TIMEOUT_SECONDS = 1.0
 PS_CACHE_TTL_SECONDS = 2.0
 AMD_PCI_VENDOR_ID = "1002"
@@ -111,6 +126,7 @@ INSTINCT_SERIES_BY_PREFIX = {
 }
 
 _amd_smi_process_backoff_until = 0.0
+_amd_smi_gpu_detail_backoff_until = 0.0
 _ps_row_cache: dict[int, tuple[float, dict[str, str]]] = {}
 PROC_ROOT = Path("/proc")
 
@@ -125,6 +141,13 @@ class CommandResult:
 
 @dataclass(slots=True)
 class AmdSmiProcessCommand:
+    result: CommandResult | None = None
+    error: CollectionError | None = None
+
+
+@dataclass(slots=True)
+class AmdSmiGpuDetailCommand:
+    args: list[str]
     result: CommandResult | None = None
     error: CollectionError | None = None
 
@@ -172,7 +195,7 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
     now = now or datetime.now()
     warnings: list[str] = []
 
-    rocm_result, amd_process_command = collect_smi_command_results()
+    rocm_result, amd_gpu_detail_commands, amd_process_command = collect_smi_command_results()
     warnings.extend(_warnings_from_result(rocm_result))
     if command_was_interrupted(rocm_result):
         raise CommandInterrupted(_command_failure_message(rocm_result))
@@ -181,6 +204,9 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
 
     rocm_data = load_json_from_text(rocm_result.stdout)
     gpus, rocm_processes, driver_version = parse_rocm_smi_json(rocm_data)
+    amd_smi_driver_version = merge_amd_smi_gpu_detail_commands(gpus, amd_gpu_detail_commands, warnings)
+    if not driver_version:
+        driver_version = amd_smi_driver_version
 
     process_rows: list[ProcessInfo] = []
     if amd_process_command is not None:
@@ -230,27 +256,52 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
     )
 
 
-def collect_smi_command_results() -> tuple[CommandResult, AmdSmiProcessCommand | None]:
-    if not should_run_amd_smi_process():
-        return run_command(ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS), None
+def collect_smi_command_results() -> tuple[CommandResult, list[AmdSmiGpuDetailCommand], AmdSmiProcessCommand | None]:
+    run_gpu_details = should_run_amd_smi_gpu_detail()
+    run_processes = should_run_amd_smi_process()
+    if not run_gpu_details and not run_processes:
+        return run_command(ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS), [], None
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    worker_count = 1 + (len(AMD_SMI_GPU_DETAIL_ARGS) if run_gpu_details else 0) + int(run_processes)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         rocm_future = executor.submit(run_command, ROCM_SMI_ARGS, timeout=ROCM_SMI_TIMEOUT_SECONDS)
-        amd_future = executor.submit(run_command, AMD_SMI_PROCESS_ARGS, timeout=AMD_SMI_PROCESS_TIMEOUT_SECONDS)
+        gpu_detail_futures = []
+        if run_gpu_details:
+            gpu_detail_futures = [
+                (args, executor.submit(run_command, args, timeout=AMD_SMI_GPU_DETAIL_TIMEOUT_SECONDS))
+                for args in AMD_SMI_GPU_DETAIL_ARGS
+            ]
+        amd_future = None
+        if run_processes:
+            amd_future = executor.submit(run_command, AMD_SMI_PROCESS_ARGS, timeout=AMD_SMI_PROCESS_TIMEOUT_SECONDS)
 
         rocm_result = rocm_future.result()
-        try:
-            amd_result = amd_future.result()
-        except CollectionError as exc:
-            amd_command = AmdSmiProcessCommand(error=exc)
-        else:
-            amd_command = AmdSmiProcessCommand(result=amd_result)
+        gpu_detail_commands: list[AmdSmiGpuDetailCommand] = []
+        for args, future in gpu_detail_futures:
+            try:
+                result = future.result()
+            except CollectionError as exc:
+                gpu_detail_commands.append(AmdSmiGpuDetailCommand(args=args, error=exc))
+            else:
+                gpu_detail_commands.append(AmdSmiGpuDetailCommand(args=args, result=result))
+        amd_command = None
+        if amd_future is not None:
+            try:
+                amd_result = amd_future.result()
+            except CollectionError as exc:
+                amd_command = AmdSmiProcessCommand(error=exc)
+            else:
+                amd_command = AmdSmiProcessCommand(result=amd_result)
 
-    return rocm_result, amd_command
+    return rocm_result, gpu_detail_commands, amd_command
 
 
 def should_run_amd_smi_process() -> bool:
     return time.monotonic() >= _amd_smi_process_backoff_until
+
+
+def should_run_amd_smi_gpu_detail() -> bool:
+    return time.monotonic() >= _amd_smi_gpu_detail_backoff_until
 
 
 def record_amd_smi_process_failure() -> None:
@@ -261,6 +312,16 @@ def record_amd_smi_process_failure() -> None:
 def record_amd_smi_process_success() -> None:
     global _amd_smi_process_backoff_until
     _amd_smi_process_backoff_until = 0.0
+
+
+def record_amd_smi_gpu_detail_failure() -> None:
+    global _amd_smi_gpu_detail_backoff_until
+    _amd_smi_gpu_detail_backoff_until = time.monotonic() + AMD_SMI_GPU_DETAIL_BACKOFF_SECONDS
+
+
+def record_amd_smi_gpu_detail_success() -> None:
+    global _amd_smi_gpu_detail_backoff_until
+    _amd_smi_gpu_detail_backoff_until = 0.0
 
 
 def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[ProcessInfo], str]:
@@ -295,6 +356,61 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
                 guid=first_non_empty(value.get("GUID")),
                 gpu_type=read_gpu_model(value),
                 gfx_version=gfx_version,
+                vendor=first_non_empty(
+                    value.get("Card Vendor"),
+                    value.get("Card vendor"),
+                    value.get("Vendor"),
+                    value.get("Device Vendor"),
+                ),
+                vbios_version=first_non_empty(
+                    value.get("VBIOS Version"),
+                    value.get("VBIOS version"),
+                    value.get("vbios_version"),
+                ),
+                pcie_bus=first_non_empty(
+                    value.get("PCIe Bus"),
+                    value.get("PCIe BDF"),
+                    value.get("PCIe Bus ID"),
+                    value.get("PCI Bus"),
+                    value.get("PCI BDF"),
+                    value.get("Bus"),
+                ),
+                max_power_w=parse_optional_float(
+                    first_non_empty(
+                        value.get("Max Socket Graphics Package Power (W)"),
+                        value.get("Max Graphics Package Power (W)"),
+                        value.get("Max Power (W)"),
+                        value.get("Power Cap (W)"),
+                    )
+                ),
+                performance_level=first_non_empty(
+                    value.get("Performance Level"),
+                    value.get("Performance level"),
+                    value.get("perf_level"),
+                    value.get("Perf"),
+                ),
+                throttle_status=first_non_empty(
+                    value.get("Throttling Status"),
+                    value.get("Throttle Status"),
+                    value.get("Throttle"),
+                    value.get("throttle_status"),
+                    value.get("indep_throttle_status"),
+                ),
+                voltage_mv=parse_optional_float(
+                    first_non_empty(
+                        value.get("Voltage (mV)"),
+                        value.get("voltage_gfx (mV)"),
+                        value.get("VDDGFX (mV)"),
+                        value.get("vddgfx_voltage (mV)"),
+                        value.get("Voltage"),
+                    )
+                ),
+                unique_id=first_non_empty(
+                    value.get("Unique ID"),
+                    value.get("Unique Id"),
+                    value.get("GPU Unique ID"),
+                ),
+                sku=first_non_empty(value.get("Card SKU"), value.get("SKU")),
                 temperature_c=parse_optional_float(
                     first_non_empty(
                         value.get("Temperature (Sensor junction) (C)"),
@@ -356,6 +472,317 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
             )
         )
     return processes
+
+
+def merge_amd_smi_gpu_detail_commands(
+    gpus: list[GpuInfo],
+    commands: list[AmdSmiGpuDetailCommand],
+    warnings: list[str],
+) -> str:
+    if not commands:
+        return ""
+
+    detail_gpus: list[GpuInfo] = []
+    driver_version = ""
+    had_failure = False
+    for command in commands:
+        try:
+            if command.error is not None:
+                raise command.error
+            if command.result is None:
+                raise CollectionError(f"{amd_smi_command_label(command.args)} did not return a result")
+            result = command.result
+            warnings.extend(_warnings_from_result(result))
+            if command_was_interrupted(result):
+                raise CommandInterrupted(_command_failure_message(result))
+            if result.returncode != 0:
+                raise CollectionError(_command_failure_message(result))
+            if result.stdout.strip():
+                data = load_json_from_text(result.stdout)
+                driver_version = first_non_empty(driver_version, amd_smi_driver_version(data))
+                detail_gpus.extend(parse_amd_smi_gpu_json(data))
+        except (CollectionError, json.JSONDecodeError, ValueError) as exc:
+            had_failure = True
+            warnings.append(f"{amd_smi_command_label(command.args)} unavailable: {exc}")
+
+    if detail_gpus and gpus:
+        merge_amd_smi_gpu_details(gpus, detail_gpus)
+    if had_failure:
+        record_amd_smi_gpu_detail_failure()
+    else:
+        record_amd_smi_gpu_detail_success()
+    return driver_version
+
+
+def amd_smi_command_label(args: list[str]) -> str:
+    return " ".join(args[:2]) if len(args) >= 2 else "amd-smi"
+
+
+def parse_amd_smi_gpu_json(data: Any) -> list[GpuInfo]:
+    gpus: list[GpuInfo] = []
+    for index, entry in iter_amd_smi_gpu_entries(data):
+        fields = flatten_amd_smi_fields(entry)
+        if not fields:
+            continue
+        model = normalize_gpu_model(
+            first_non_empty(
+                amd_smi_text_field(fields, ("model", "model_name", "product_name", "market_name")),
+                amd_smi_text_field(fields, ("card_model", "device_name")),
+            )
+        )
+        device_id = normalize_device_id(amd_smi_text_field(fields, ("device_id", "asic_id")))
+        if not model and device_id:
+            model = GPU_MODEL_BY_DEVICE_ID.get(device_id, "") or load_amd_pci_models().get(device_id, "")
+        gpus.append(
+            GpuInfo(
+                index=index,
+                name=amd_smi_text_field(fields, ("market_name", "product_name", "card_name", "card_series")),
+                guid=amd_smi_text_field(fields, ("guid",)),
+                gpu_type=model,
+                gfx_version=amd_smi_text_field(fields, ("gfx_version", "gfxip", "gfx_ip", "gfx")),
+                vendor=amd_smi_text_field(fields, ("vendor_name", "vendor")),
+                vbios_version=amd_smi_text_field(fields, ("vbios_version", "vbios")),
+                pcie_bus=amd_smi_text_field(fields, ("bdf", "pci_bdf", "pcie_bdf", "pci_bus", "pcie_bus", "bus_id")),
+                max_power_w=amd_smi_float_field(
+                    fields,
+                    ("max_power", "max_power_w", "power_cap", "power_limit", "max_socket_power"),
+                ),
+                performance_level=amd_smi_text_field(fields, ("performance_level", "perf_level", "perf")),
+                throttle_status=amd_smi_text_field(
+                    fields,
+                    ("throttle_status", "indep_throttle_status", "throttling_status", "throttle"),
+                ),
+                voltage_mv=amd_smi_float_field(fields, ("voltage_mv", "voltage_gfx", "gfx_voltage", "vddgfx", "voltage")),
+                unique_id=amd_smi_text_field(
+                    fields,
+                    ("unique_id", "gpu_unique_id", "uuid", "serial_number", "asic_serial"),
+                ),
+                sku=amd_smi_text_field(fields, ("sku", "card_sku", "product_sku")),
+                temperature_c=amd_smi_float_field(
+                    fields,
+                    ("temperature_c", "junction_temperature", "hotspot_temperature", "edge_temperature", "temperature"),
+                ),
+                fan_percent=amd_smi_float_field(fields, ("fan_percent", "fan_speed_percent")),
+                fan_rpm=amd_smi_int_field(fields, ("fan_rpm", "fan_speed_rpm", "current_fan_speed")),
+                power_w=amd_smi_float_field(
+                    fields,
+                    ("average_socket_power", "current_socket_power", "socket_power", "power_usage"),
+                ),
+                sclk_mhz=amd_smi_clock_field(fields, ("current_gfxclk", "gfxclk", "sclk", "gfx_clock")),
+                mclk_mhz=amd_smi_clock_field(fields, ("current_uclk", "uclk", "mclk", "memory_clock")),
+                memory_used_bytes=amd_smi_memory_field(
+                    fields,
+                    ("vram_used", "used_vram", "memory_used", "used_memory"),
+                ),
+                memory_total_bytes=amd_smi_memory_field(
+                    fields,
+                    ("vram_total", "total_vram", "memory_total", "total_memory"),
+                ),
+                utilization_percent=clamp_percent(
+                    amd_smi_float_field(fields, ("gpu_utilization", "gfx_activity", "gpu_use", "utilization"))
+                ),
+            )
+        )
+    return gpus
+
+
+def amd_smi_driver_version(data: Any) -> str:
+    return amd_smi_text_field(flatten_amd_smi_fields(data), ("driver_version", "driver"))
+
+
+def merge_amd_smi_gpu_details(gpus: list[GpuInfo], details: list[GpuInfo]) -> None:
+    details_by_index: dict[int, GpuInfo] = {}
+    for detail in details:
+        merged = details_by_index.get(detail.index)
+        if merged is None:
+            details_by_index[detail.index] = detail
+        else:
+            fill_missing_gpu_detail(merged, detail)
+
+    for gpu in gpus:
+        detail = details_by_index.get(gpu.index)
+        if detail is not None:
+            fill_missing_gpu_detail(gpu, detail)
+
+
+def fill_missing_gpu_detail(target: GpuInfo, source: GpuInfo) -> None:
+    fill_gpu_text_field(target, source, "name", replace_generic=True)
+    for field_name in (
+        "guid",
+        "gpu_type",
+        "gfx_version",
+        "vendor",
+        "vbios_version",
+        "pcie_bus",
+        "performance_level",
+        "throttle_status",
+        "unique_id",
+        "sku",
+    ):
+        fill_gpu_text_field(target, source, field_name)
+    for field_name in ("max_power_w", "voltage_mv", "temperature_c", "fan_percent", "power_w"):
+        fill_gpu_optional_field(target, source, field_name)
+    for field_name in ("fan_rpm", "sclk_mhz", "mclk_mhz"):
+        fill_gpu_optional_field(target, source, field_name)
+    if target.memory_total_bytes <= 0 and source.memory_total_bytes > 0:
+        target.memory_total_bytes = source.memory_total_bytes
+    if target.memory_used_bytes <= 0 and source.memory_used_bytes > 0:
+        target.memory_used_bytes = source.memory_used_bytes
+
+
+def fill_gpu_text_field(target: GpuInfo, source: GpuInfo, field_name: str, replace_generic: bool = False) -> None:
+    source_value = first_non_empty(getattr(source, field_name))
+    if not source_value:
+        return
+    target_value = first_non_empty(getattr(target, field_name))
+    if target_value and not (replace_generic and is_generic_gpu_name(target_value)):
+        return
+    setattr(target, field_name, source_value)
+
+
+def is_generic_gpu_name(value: str) -> bool:
+    return value == "AMD GPU" or re.fullmatch(r"0x[0-9a-f]+", value, flags=re.IGNORECASE) is not None
+
+
+def fill_gpu_optional_field(target: GpuInfo, source: GpuInfo, field_name: str) -> None:
+    if getattr(target, field_name) is not None:
+        return
+    source_value = getattr(source, field_name)
+    if source_value is not None:
+        setattr(target, field_name, source_value)
+
+
+def iter_amd_smi_gpu_entries(data: Any, fallback_index: int | None = None):
+    if isinstance(data, list):
+        for index, item in enumerate(data):
+            yield from iter_amd_smi_gpu_entries(item, index)
+        return
+
+    if not isinstance(data, dict):
+        return
+
+    index = amd_smi_gpu_index(data, fallback_index)
+    fields = flatten_amd_smi_fields(data)
+    if index is not None and amd_smi_fields_have_gpu_detail(fields):
+        yield index, data
+        return
+
+    for key, value in data.items():
+        if not isinstance(value, (dict, list)):
+            continue
+        key_index = amd_smi_gpu_index_from_text(key)
+        yield from iter_amd_smi_gpu_entries(value, key_index)
+
+
+def amd_smi_gpu_index(data: dict[str, Any], fallback_index: int | None = None) -> int | None:
+    for key, value in data.items():
+        if normalize_amd_smi_key(key) in ("gpu", "gpu_id", "gpu_index", "card", "card_id"):
+            index = amd_smi_gpu_index_from_text(value)
+            if index is not None:
+                return index
+    return fallback_index
+
+
+def amd_smi_gpu_index_from_text(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group(0)) if match else None
+
+
+def amd_smi_fields_have_gpu_detail(fields: list[tuple[str, Any]]) -> bool:
+    detail_aliases = (
+        "market_name",
+        "product_name",
+        "vendor_name",
+        "vbios_version",
+        "bdf",
+        "max_power",
+        "performance_level",
+        "throttle_status",
+        "voltage",
+        "memory_total",
+        "gpu_utilization",
+    )
+    return any(amd_smi_key_matches_alias(key, alias) for key, _value in fields for alias in detail_aliases)
+
+
+def flatten_amd_smi_fields(data: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]]:
+    fields: list[tuple[str, Any]] = []
+    if path:
+        fields.append((".".join(path), data))
+    if isinstance(data, dict):
+        for key, value in data.items():
+            fields.extend(flatten_amd_smi_fields(value, (*path, normalize_amd_smi_key(key))))
+    elif isinstance(data, list):
+        for index, value in enumerate(data):
+            fields.extend(flatten_amd_smi_fields(value, (*path, str(index))))
+    return fields
+
+
+def amd_smi_text_field(fields: list[tuple[str, Any]], aliases: tuple[str, ...]) -> str:
+    for alias in aliases:
+        for key, value in fields:
+            if isinstance(value, (dict, list)):
+                continue
+            if not amd_smi_key_matches_alias(key, alias):
+                continue
+            text = first_non_empty(value)
+            if text:
+                return text
+    return ""
+
+
+def amd_smi_float_field(fields: list[tuple[str, Any]], aliases: tuple[str, ...]) -> float | None:
+    value = amd_smi_raw_field(fields, aliases)
+    if isinstance(value, dict):
+        value = value.get("value")
+    return parse_optional_float(value)
+
+
+def amd_smi_int_field(fields: list[tuple[str, Any]], aliases: tuple[str, ...]) -> int | None:
+    value = amd_smi_raw_field(fields, aliases)
+    if isinstance(value, dict):
+        value = value.get("value")
+    parsed = parse_optional_float(value)
+    return int(round(parsed)) if parsed is not None else None
+
+
+def amd_smi_clock_field(fields: list[tuple[str, Any]], aliases: tuple[str, ...]) -> int | None:
+    value = amd_smi_raw_field(fields, aliases)
+    if isinstance(value, dict):
+        value = value.get("value")
+    return parse_clock_mhz(value)
+
+
+def amd_smi_memory_field(fields: list[tuple[str, Any]], aliases: tuple[str, ...]) -> int:
+    value = amd_smi_raw_field(fields, aliases)
+    return parse_memory_bytes_field(value) if value is not None else 0
+
+
+def amd_smi_raw_field(fields: list[tuple[str, Any]], aliases: tuple[str, ...]) -> Any:
+    for alias in aliases:
+        for key, value in fields:
+            if amd_smi_key_matches_alias(key, alias):
+                return value
+    return None
+
+
+def amd_smi_key_matches_alias(key: str, alias: str) -> bool:
+    normalized_alias = normalize_amd_smi_key(alias)
+    parts = [part for part in key.split(".") if part]
+    if not parts:
+        return False
+    if parts[-1] == normalized_alias:
+        return True
+    compact = "_".join(parts)
+    return compact == normalized_alias or compact.endswith(f"_{normalized_alias}")
+
+
+def normalize_amd_smi_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
 def parse_amd_smi_process_json(data: list[dict[str, Any]], gpus: list[GpuInfo]) -> list[ProcessInfo]:

@@ -235,7 +235,15 @@ def render_snapshot(
                 show_subsecond_time=show_subsecond_time,
                 terminal_width=terminal_width,
             )
-            parts = [header, render_gpu_table(snapshot.gpus, process_state=process_state, processes=snapshot.processes)]
+            parts = [
+                header,
+                render_gpu_table(
+                    snapshot.gpus,
+                    process_state=process_state,
+                    processes=snapshot.processes,
+                    driver_version=snapshot.driver_version,
+                ),
+            ]
             if history is not None:
                 parts.append(
                     render_metrics_graphs(
@@ -641,10 +649,11 @@ def render_gpu_table(
     gpus: list[GpuInfo],
     process_state: ProcessViewState | None = None,
     processes: Sequence[ProcessInfo] = (),
+    driver_version: str = "",
 ) -> Table:
     focused_gpu = focused_gpu_info(gpus, process_state)
     if focused_gpu is not None:
-        return render_focused_gpu_metrics(focused_gpu, processes)
+        return render_focused_gpu_metrics(focused_gpu, processes, driver_version)
 
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
@@ -687,8 +696,12 @@ def render_gpu_table(
     return table
 
 
-def render_focused_gpu_metrics(gpu: GpuInfo, processes: Sequence[ProcessInfo] = ()) -> Table:
-    metrics = focused_gpu_metrics_rows(gpu, processes)
+def render_focused_gpu_metrics(
+    gpu: GpuInfo,
+    processes: Sequence[ProcessInfo] = (),
+    driver_version: str = "",
+) -> Table:
+    metrics = focused_gpu_metrics_rows(gpu, processes, driver_version)
     content_rows = FOCUSED_GPU_METRICS_ROWS
     column_count = max(1, math.ceil(len(metrics) / content_rows))
     metric_columns = focused_gpu_metric_columns(metrics, content_rows, column_count)
@@ -745,7 +758,11 @@ def focused_gpu_metric_cell(label: str, value: Text) -> Text:
     return cell
 
 
-def focused_gpu_metrics_rows(gpu: GpuInfo, processes: Sequence[ProcessInfo] = ()) -> list[tuple[str, Text]]:
+def focused_gpu_metrics_rows(
+    gpu: GpuInfo,
+    processes: Sequence[ProcessInfo] = (),
+    driver_version: str = "",
+) -> list[tuple[str, Text]]:
     gpu_processes = [proc for proc in processes if proc.gpu_index == gpu.index]
     top_gpu_process = max(gpu_processes, key=lambda proc: proc.gpu_memory_bytes, default=None)
     memory_free_bytes = max(0, gpu.memory_total_bytes - gpu.memory_used_bytes)
@@ -757,9 +774,15 @@ def focused_gpu_metrics_rows(gpu: GpuInfo, processes: Sequence[ProcessInfo] = ()
     return [
         ("GPU", Text(str(gpu.index), style=f"bold {DRACULA_FG}")),
         ("Name", gpu_info_text(gpu.name)),
+        ("Vendor", gpu_info_text(gpu.vendor)),
         ("GUID", gpu_info_text(gpu.guid)),
+        ("Unique ID", gpu_info_text(gpu.unique_id)),
         ("Model", gpu_info_text(gpu.gpu_type)),
+        ("SKU", gpu_info_text(gpu.sku)),
         ("Architecture", gpu_info_text(gpu.gfx_version)),
+        ("VBIOS", gpu_info_text(gpu.vbios_version)),
+        ("Driver", gpu_info_text(driver_version)),
+        ("PCIe", gpu_info_text(gpu.pcie_bus)),
         (
             "Temperature",
             gpu_info_text(
@@ -776,6 +799,10 @@ def focused_gpu_metrics_rows(gpu: GpuInfo, processes: Sequence[ProcessInfo] = ()
         ),
         ("Fan RPM", gpu_info_text(f"{gpu.fan_rpm}RPM" if gpu.fan_rpm is not None else "")),
         ("Power", gpu_info_text(f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "", power_style(gpu.power_w))),
+        ("Max Power", gpu_info_text(f"{gpu.max_power_w:.0f}W" if gpu.max_power_w is not None else "", power_style(gpu.max_power_w))),
+        ("Perf", gpu_info_text(gpu.performance_level)),
+        ("Throttle", gpu_info_text(gpu.throttle_status, throttle_style(gpu.throttle_status))),
+        ("Voltage", gpu_info_text(f"{gpu.voltage_mv:.0f}mV" if gpu.voltage_mv is not None else "")),
         ("SCLK", gpu_info_text(format_clock(gpu.sclk_mhz), clock_style(gpu.sclk_mhz))),
         ("MCLK", gpu_info_text(format_clock(gpu.mclk_mhz), clock_style(gpu.mclk_mhz))),
         ("Memory Used", gpu_info_text(format_bytes_mib(gpu.memory_used_bytes), percent_style(gpu.memory_percent))),
@@ -837,6 +864,15 @@ def gpu_info_text(value: str, style: str = DRACULA_FG) -> Text:
     if not text or text == "N/A":
         return Text("N/A", style=DRACULA_DIM)
     return Text(text, style=style)
+
+
+def throttle_style(value: str) -> str:
+    text = value.strip().lower()
+    if not text or text in ("n/a", "none", "no", "false", "0"):
+        return DRACULA_DIM
+    if text in ("normal", "not throttled", "off", "disabled"):
+        return DRACULA_GREEN
+    return f"bold {DRACULA_ORANGE}"
 
 
 def summarize_gpu_models(gpus: list[GpuInfo]) -> str:
