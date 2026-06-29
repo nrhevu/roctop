@@ -14,11 +14,10 @@ from rich.segment import Segment
 from rich.table import Table
 from rich.text import Text
 
+from . import __version__
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricSample, MetricsHistory
 from .interaction import (
-    HELP_ENTRIES,
-    HELP_VISIBLE_ROWS,
     KILL_CONFIRM_LABELS,
     KILL_CONFIRM_OPTIONS,
     MODE_FILTER,
@@ -58,6 +57,10 @@ GPU_GRAPH_HEIGHT = 15
 GPU_GRAPH_WIDE_MIN_WIDTH = 100
 FOCUSED_GPU_METRICS_ROWS = 8
 FOCUSED_GPU_METRICS_COLUMN_GAP = "        "
+HELP_ONE_COLUMN_KEY_WIDTH = 22
+HELP_TWO_COLUMN_KEY_WIDTH = 16
+HELP_LEFT_COLUMN_WIDTH = 58
+HELP_TWO_COLUMN_MIN_WIDTH = 110
 PROCESS_TABLE_CHROME_ROWS = 5
 PROCESS_TABLE_COLUMN_COUNT = 9
 PROCESS_TABLE_CELL_PADDING_WIDTH = 2
@@ -435,30 +438,179 @@ def render_help_popup(
     terminal_width: int | None = None,
     gpus: Sequence[GpuInfo] | None = None,
 ) -> Panel:
-    max_offset = max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
-    start = min(max(0, process_state.help_scroll_offset), max_offset)
-    end = min(len(HELP_ENTRIES), start + HELP_VISIBLE_ROWS)
     available_width = terminal_width or 88
     panel_width = min(128, max(1, available_width - 4))
-    help_rows = help_popup_rows(gpus)
-    key_width, action_width, mode_width = help_popup_column_widths(help_rows, panel_width)
-
-    table = Table(box=box.SIMPLE, expand=True, show_lines=False, padding=(0, 1))
-    table.add_column("KEY", style=f"bold {DRACULA_ORANGE}", no_wrap=True, width=key_width)
-    table.add_column("ACTION", style=DRACULA_FG, width=action_width)
-    table.add_column("MODE", style=DRACULA_DIM, no_wrap=True, width=mode_width)
-    for key, action, mode in help_rows[start:end]:
-        table.add_row(key, action, mode)
-    table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   ?/Esc: close"
-    table.caption_style = DRACULA_DIM
 
     return Panel(
-        table,
-        title=Text(f"Help  {start + 1}-{end}/{len(HELP_ENTRIES)}", style=f"bold {DRACULA_CYAN}"),
+        help_popup_body(gpus, panel_width),
         border_style=DRACULA_CYAN,
         box=box.SQUARE,
         width=panel_width,
     )
+
+
+def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 128) -> Text:
+    help_text = Text(no_wrap=True, overflow="crop")
+    help_text.append(f"roctop {__version__} - AMD GPU/process monitor for ROCm\n", style=f"bold {DRACULA_CYAN}")
+    help_text.append("\n")
+
+    append_help_section(help_text, "Colors")
+    append_color_help_row(help_text, "green", DRACULA_GREEN, "good headroom, low pressure")
+    append_color_help_row(help_text, "yellow", DRACULA_YELLOW, "high usage, worth watching")
+    append_color_help_row(help_text, "red", DRACULA_RED, "critical usage, hot, full, or high pressure")
+    append_color_help_row(help_text, "cyan", DRACULA_CYAN, "clocks, active selections, focused values")
+    append_color_help_row(help_text, "blue", DRACULA_DIM, "labels and secondary metric names")
+    append_color_help_row(help_text, "gray", DRACULA_TRACK, "inactive, unavailable, or dimmed values")
+    help_text.append("\n")
+
+    gpu_keys = gpu_filter_key_label(gpus)
+    navigation_rows = [
+        ("j/k, Up/Down", "move process cursor"),
+        ("PgUp/PgDn", "move by page"),
+    ]
+    if gpu_keys:
+        navigation_rows.append((gpu_keys, "focus GPU"))
+    navigation_rows.append(("Esc", "clear filter or cancel active mode"))
+    process_view_rows = [
+        ("s", "sort processes"),
+        ("t", "toggle process tree"),
+        ("z", "zoom process table"),
+        ("i", "inspect selected process"),
+        ("x", "kill selected process"),
+        ("q", "quit or cancel menu"),
+    ]
+    search_rows = [
+        ("/", "search processes"),
+        ("n/N", "next/previous search match"),
+        ("f", "filter processes"),
+        ("Esc", "clear active search/filter"),
+    ]
+    graph_rows = [
+        ("g", "toggle GPU graphs"),
+        (",/.", "pan graph older/newer"),
+        ("r", "reset graph to live"),
+    ]
+    tree_rows = [
+        ("p", "jump to parent process"),
+        ("h / Left", "jump to previous sibling"),
+        ("l / Right", "jump to next sibling"),
+    ]
+    menu_rows = [
+        ("h/l or arrows", "move sort/kill menu selection"),
+        ("Enter", "apply selected sort or kill option"),
+        ("j/k, Up/Down", "scroll popup one row"),
+        ("h/l, Left/Right", "page popup up/down"),
+        ("y", "send SIGTERM in kill confirmation"),
+        ("Ctrl-C", "quit"),
+    ]
+
+    if panel_width < HELP_TWO_COLUMN_MIN_WIDTH:
+        append_help_section(help_text, "Navigation")
+        append_help_key_rows(help_text, navigation_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        help_text.append("\n")
+
+        append_help_section(help_text, "Process view")
+        append_help_key_rows(help_text, process_view_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        help_text.append("\n")
+
+        append_help_section(help_text, "Search and filters")
+        append_help_key_rows(help_text, search_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        help_text.append("\n")
+
+        append_help_section(help_text, "Graphs")
+        append_help_key_rows(help_text, graph_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        help_text.append("\n")
+
+        append_help_section(help_text, "Tree mode")
+        append_help_key_rows(help_text, tree_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        help_text.append("\n")
+
+        append_help_section(help_text, "Menus and popups")
+        append_help_key_rows(help_text, menu_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        help_text.append("\n")
+        help_text.append("Press Esc or ? to return.", style=f"bold {DRACULA_CYAN}")
+        return help_text
+
+    append_help_section_pair(
+        help_text,
+        "Navigation",
+        navigation_rows,
+        "Process view",
+        process_view_rows,
+    )
+    help_text.append("\n")
+
+    append_help_section_pair(
+        help_text,
+        "Search and filters",
+        search_rows,
+        "Graphs",
+        graph_rows,
+    )
+    help_text.append("\n")
+
+    append_help_section_pair(
+        help_text,
+        "Tree mode",
+        tree_rows,
+        "Menus and popups",
+        menu_rows,
+    )
+    help_text.append("\n")
+    help_text.append("Press Esc or ? to return.", style=f"bold {DRACULA_CYAN}")
+    return help_text
+
+
+def append_help_section(help_text: Text, title: str) -> None:
+    help_text.append(f"{title}:\n", style=f"bold {DRACULA_FG}")
+
+
+def append_color_help_row(help_text: Text, name: str, color: str, description: str) -> None:
+    help_text.append("  ")
+    help_text.append(f"{name:<7}", style=f"bold {color}")
+    help_text.append(": ", style=DRACULA_FG)
+    help_text.append(description, style=DRACULA_FG)
+    help_text.append("\n")
+
+
+def append_help_key_rows(help_text: Text, rows: Sequence[tuple[str, str]], key_width: int) -> None:
+    for key, action in rows:
+        help_text.append_text(help_key_cell(key, action, key_width))
+        help_text.append("\n")
+
+
+def append_help_section_pair(
+    help_text: Text,
+    left_title: str,
+    left_rows: Sequence[tuple[str, str]],
+    right_title: str,
+    right_rows: Sequence[tuple[str, str]],
+) -> None:
+    left_lines = help_section_lines(left_title, left_rows)
+    right_lines = help_section_lines(right_title, right_rows)
+    for index in range(max(len(left_lines), len(right_lines))):
+        left = left_lines[index] if index < len(left_lines) else Text("")
+        right = right_lines[index] if index < len(right_lines) else Text("")
+        help_text.append_text(left)
+        padding = max(2, HELP_LEFT_COLUMN_WIDTH - len(left.plain))
+        help_text.append(" " * padding)
+        help_text.append_text(right)
+        help_text.append("\n")
+
+
+def help_section_lines(title: str, rows: Sequence[tuple[str, str]]) -> list[Text]:
+    lines = [Text(f"{title}:", style=f"bold {DRACULA_FG}")]
+    lines.extend(help_key_cell(key, action, HELP_TWO_COLUMN_KEY_WIDTH) for key, action in rows)
+    return lines
+
+
+def help_key_cell(key: str, action: str, key_width: int) -> Text:
+    cell = Text(no_wrap=True, overflow="crop")
+    cell.append(" " * max(0, key_width - len(key)))
+    cell.append(key, style=f"bold {DRACULA_CYAN}")
+    cell.append(": ", style=DRACULA_FG)
+    cell.append(action, style=DRACULA_FG)
+    return cell
 
 
 def render_process_info_popup(
@@ -504,25 +656,6 @@ def render_process_info_popup(
 def process_info_panel_width(terminal_width: int | None = None) -> int:
     available_width = terminal_width or 88
     return min(128, max(1, available_width - 4))
-
-
-def help_popup_rows(gpus: Sequence[GpuInfo] | None = None) -> list[tuple[str, str, str]]:
-    rows = []
-    for key, action, mode in HELP_ENTRIES:
-        display_key = gpu_filter_key_label(gpus) if key == "0-9" else key
-        rows.append((display_key or key, action, mode))
-    return rows
-
-
-def help_popup_column_widths(rows: list[tuple[str, str, str]], panel_width: int) -> tuple[int, int, int]:
-    key_width = max((len(key) for key, _action, _mode in rows), default=0)
-    key_width = max(key_width, len("KEY"))
-    mode_width = max((len(mode) for _key, _action, mode in rows), default=0)
-    mode_width = max(mode_width, len("MODE"))
-    max_action_width = max((len(action) for _key, action, _mode in rows), default=0)
-    max_action_width = max(max_action_width, len("ACTION"))
-    action_width = min(max_action_width, max(1, panel_width - key_width - mode_width - 16))
-    return key_width, action_width, mode_width
 
 
 def process_info_column_widths(rows: list[tuple[str, str]], panel_width: int) -> tuple[int, int]:

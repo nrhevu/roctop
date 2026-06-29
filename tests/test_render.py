@@ -1110,26 +1110,35 @@ class RenderTests(unittest.TestCase):
         console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
         console.print(render_snapshot(snapshot, process_state=state, terminal_height=45, terminal_width=140))
         plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
 
         self.assertEqual(
             estimate_process_view_rows(snapshot, None, 45, normal_state),
             estimate_process_view_rows(snapshot, None, 45, state),
         )
-        self.assertIn("Help  1-", plain)
-        self.assertIn("KEY", plain)
-        self.assertIn("ACTION", plain)
-        self.assertIn("MODE", plain)
-        self.assertIn("Open help / close help", plain)
+        self.assertIn("roctop 0.4.0 - AMD GPU/process monitor for ROCm", plain)
+        self.assertIn("Colors:", plain)
+        self.assertIn("green  : good headroom, low pressure", plain)
+        self.assertIn("yellow : high usage, worth watching", plain)
+        self.assertIn("red    : critical usage, hot, full, or high pressure", plain)
+        self.assertIn("cyan   : clocks, active selections, focused values", plain)
+        self.assertIn("blue   : labels and secondary metric names", plain)
+        self.assertIn("gray   : inactive, unavailable, or dimmed values", plain)
+        self.assertNotIn("KEY", plain)
+        self.assertNotIn("ACTION", plain)
+        self.assertNotIn("MODE", plain)
         self.assertIn("<0-3>", plain)
-        self.assertIn("Focus GPU", plain)
-        self.assertIn("Zoom process table", plain)
-        self.assertIn("Toggle GPU graphs", plain)
-        self.assertIn("Pan graph older/newer", plain)
-        self.assertIn("Reset graph to live", plain)
-        self.assertIn("j/k or Up/Down: scroll", plain)
-        self.assertIn("h/l or Left/Right: page", plain)
-        self.assertIn("?/Esc: close", plain)
-        self.assertLess(plain.index("│ GPU"), plain.index("Help  1-"))
+        self.assertIn("<0-3>: focus GPU", plain)
+        self.assertIn("z: zoom process table", plain)
+        self.assertIn("g: toggle GPU graphs", plain)
+        self.assertIn(",/.: pan graph older/newer", plain)
+        self.assertIn("r: reset graph to live", plain)
+        self.assertIn("j/k, Up/Down: scroll popup one row", plain)
+        self.assertIn("h/l, Left/Right: page popup up/down", plain)
+        self.assertIn("Press Esc or ? to return.", plain)
+        self.assertIn("38;2;80;250;123", styled)
+        self.assertIn("38;2;241;250;140", styled)
+        self.assertIn("38;2;255;85;85", styled)
 
     def test_help_overlay_only_replaces_popup_rectangle(self) -> None:
         base_line = "L" + "." * 118 + "R"
@@ -1139,24 +1148,21 @@ class RenderTests(unittest.TestCase):
         console.print(render.HelpOverlay(base, state, terminal_height=25, terminal_width=120))
         lines = console.export_text(clear=False).splitlines()
 
-        help_row = next(line for line in lines if "Open help / close help" in line)
+        help_row = next(line for line in lines if "roctop 0.4.0" in line)
         self.assertTrue(help_row.startswith("L"))
         self.assertTrue(help_row.rstrip().endswith("R"))
-        self.assertIn("normal, help", help_row)
+        self.assertIn("AMD GPU/process monitor", help_row)
 
-    def test_help_popup_keeps_column_positions_when_scrolled(self) -> None:
+    def test_help_popup_keeps_key_action_positions_aligned(self) -> None:
         action_positions = []
-        mode_positions = []
-        for offset in (0, 3):
-            state = ProcessViewState(mode=MODE_HELP, help_scroll_offset=offset)
+        for gpus in ([GpuInfo(index=index) for index in range(4)], [GpuInfo(index=index) for index in range(8)]):
+            state = ProcessViewState(mode=MODE_HELP)
             console = Console(width=120, record=True, file=StringIO())
-            console.print(render.render_help_popup(state, terminal_width=120))
-            line = next(line for line in console.export_text().splitlines() if "Move sort/kill menu selection" in line)
-            action_positions.append(line.index("Move sort/kill menu selection"))
-            mode_positions.append(line.index("sort, kill"))
+            console.print(render.render_help_popup(state, terminal_width=120, gpus=gpus))
+            line = next(line for line in console.export_text().splitlines() if "move process cursor" in line)
+            action_positions.append(line.index("move process cursor"))
 
         self.assertEqual(action_positions[0], action_positions[1])
-        self.assertEqual(mode_positions[0], mode_positions[1])
 
     def test_process_info_popup_renders_selected_process_details(self) -> None:
         process = ProcessInfo(
