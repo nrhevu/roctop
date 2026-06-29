@@ -318,24 +318,31 @@ class RenderTests(unittest.TestCase):
         focused_metric_lines = [
             line
             for line in output.splitlines()
-            if any(label in line for label in ("GPU: 1", "Name:", "Vendor:", "GUID:", "Unique ID:"))
+            if any(label in line for label in ("GPU: 1", "Model:", "Utilization:", "Memory Usage:", "Memory Free %:"))
         ]
         self.assertTrue(all(line.count("│") == 2 for line in focused_metric_lines))
         self.assertTrue(
             any(
                 "GPU: 1" in line
-                and "VBIOS:" in line
-                and "Perf:" in line
-                and "Memory Free %:" in line
-                and "Top Proc User:" in line
+                and "Processes: 2" in line
+                and "Temperature:" in line
+                and "Proc CPU:" in line
+                and "Architecture:" in line
                 for line in focused_metric_lines
             )
         )
-        model_line = next(
-            line for line in output.splitlines() if "Model: AMD Instinct MI350X" in line and "Memory Free:" in line
+        first_metric_line = next(
+            line for line in focused_metric_lines if "GPU: 1" in line and "Processes: 2" in line
         )
+        self.assertLess(first_metric_line.index("Temperature:"), first_metric_line.index("Processes: 2"))
+        model_line = next(
+            line
+            for line in output.splitlines()
+            if "Model: AMD Instinct MI350X" in line and "Power:" in line and "Top Proc Cmd:" in line
+        )
+        self.assertLess(model_line.index("Power:"), model_line.index("Top Proc Cmd:"))
         self.assertGreaterEqual(
-            model_line.index("Memory Free:") - (model_line.index("Model:") + len("Model: AMD Instinct MI350X")),
+            model_line.index("Top Proc Cmd:") - (model_line.index("Model:") + len("Model: AMD Instinct MI350X")),
             8,
         )
         self.assertNotIn("AMD GPU 0", output)
