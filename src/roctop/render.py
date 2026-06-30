@@ -15,12 +15,15 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
+from .debug_counters import GpuDebugCounters, KernelDebugCounters, ProcessDebugCounters
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricSample, MetricsHistory
 from .interaction import (
+    GPU_DEBUG_VISIBLE_ROWS,
     KILL_CONFIRM_LABELS,
     KILL_CONFIRM_OPTIONS,
     MODE_FILTER,
+    MODE_GPU_DEBUG,
     MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_PROCESS_INFO,
@@ -215,6 +218,13 @@ def render_snapshot(
                     terminal_height,
                     terminal_width,
                 )
+            if process_state.mode == MODE_GPU_DEBUG:
+                return PopupOverlay(
+                    base,
+                    lambda width: render_gpu_debug_popup(process_state, width),
+                    terminal_height,
+                    terminal_width,
+                )
             return base
 
         process_rows = estimate_process_view_rows(snapshot, history, terminal_height, process_state, terminal_width)
@@ -268,6 +278,13 @@ def render_snapshot(
             return PopupOverlay(
                 base,
                 lambda width: render_process_info_popup(snapshot, process_state, width),
+                terminal_height,
+                terminal_width,
+            )
+        if process_state is not None and process_state.mode == MODE_GPU_DEBUG:
+            return PopupOverlay(
+                base,
+                lambda width: render_gpu_debug_popup(process_state, width),
                 terminal_height,
                 terminal_width,
             )
@@ -403,6 +420,7 @@ def append_process_help(
     append_keybinding(details, "z", "zoom", separator=separator)
     graph_label = "avg graph" if process_state is not None and process_state.gpu_graphs_visible else "graphs"
     append_keybinding(details, "g", graph_label, separator=separator)
+    append_keybinding(details, "d", "debug", separator=separator)
     append_keybinding(details, "i", "inspect", separator=separator)
     append_keybinding(details, "x", "kill", separator=separator)
     append_keybinding(details, "?", "help", separator=separator)
@@ -475,6 +493,7 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
         ("s", "sort processes"),
         ("t", "toggle process tree"),
         ("z", "zoom process table"),
+        ("d", "GPU debug counters"),
         ("i", "inspect selected process"),
         ("x", "kill selected process"),
         ("q", "quit or cancel menu"),
@@ -776,6 +795,150 @@ def process_info_parent(process_state: ProcessViewState) -> str:
     if proc is not None and proc.ppid is not None:
         return str(proc.ppid)
     return "-"
+
+
+def render_gpu_debug_popup(
+    process_state: ProcessViewState,
+    terminal_width: int | None = None,
+) -> Panel:
+    panel_width = gpu_debug_panel_width(terminal_width)
+    rows = gpu_debug_rows(process_state)
+    process_state.gpu_debug_render_row_count = len(rows)
+    max_offset = max(0, len(rows) - GPU_DEBUG_VISIBLE_ROWS)
+    start = min(max(0, process_state.gpu_debug_scroll_offset), max_offset)
+    process_state.gpu_debug_scroll_offset = start
+    end = min(len(rows), start + GPU_DEBUG_VISIBLE_ROWS)
+
+    table = Table(box=box.SIMPLE, expand=True, show_header=True, show_lines=False, padding=(0, 1))
+    table.add_column("PID", justify="right", no_wrap=True, width=7)
+    table.add_column("Scope", overflow="crop", ratio=3)
+    table.add_column("Disp", justify="right", no_wrap=True)
+    table.add_column("Waves", justify="right", no_wrap=True)
+    table.add_column("Instr issued", justify="right", no_wrap=True)
+    table.add_column("L2 hit", justify="right", no_wrap=True)
+    table.add_column("Read", justify="right", no_wrap=True)
+    table.add_column("Write", justify="right", no_wrap=True)
+    table.add_column("Status", overflow="crop", ratio=2)
+    visible_rows = rows[start:end]
+    for row in visible_rows:
+        table.add_row(*row)
+    for _ in range(GPU_DEBUG_VISIBLE_ROWS - len(visible_rows)):
+        table.add_row("", "", "", "", "", "", "", "", "")
+    table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   d/Esc: close"
+    table.caption_style = DRACULA_DIM
+
+    debug_snapshot = gpu_debug_snapshot(process_state)
+    gpu_index = process_state.gpu_filter_index
+    if debug_snapshot is not None:
+        gpu_index = debug_snapshot.gpu_index
+    title = "GPU Debug Counters" if gpu_index is None else f"GPU Debug Counters  GPU {gpu_index}"
+    return Panel(
+        table,
+        title=Text(title, style=f"bold {DRACULA_CYAN}"),
+        border_style=DRACULA_CYAN,
+        box=box.SQUARE,
+        width=panel_width,
+    )
+
+
+def gpu_debug_panel_width(terminal_width: int | None = None) -> int:
+    available_width = terminal_width or 120
+    return min(160, max(1, available_width - 4))
+
+
+def gpu_debug_snapshot(process_state: ProcessViewState) -> GpuDebugCounters | None:
+    snapshot = process_state.gpu_debug_snapshot
+    return snapshot if isinstance(snapshot, GpuDebugCounters) else None
+
+
+def gpu_debug_rows(process_state: ProcessViewState) -> list[tuple[str, str, str, str, str, str, str, str, str]]:
+    debug_snapshot = gpu_debug_snapshot(process_state)
+    if debug_snapshot is None:
+        return [("", "Waiting for counter sample", "", "", "", "", "", "", "starting")]
+    if not debug_snapshot.processes:
+        status = debug_snapshot.status or "No debug counter data"
+        counters = ", ".join(debug_snapshot.counters)
+        scope = counters if counters else "Counter backend"
+        return [("", scope, "", "", "", "", "", "", status)]
+
+    rows: list[tuple[str, str, str, str, str, str, str, str, str]] = []
+    for process in debug_snapshot.processes:
+        rows.append(gpu_debug_process_row(process))
+        for kernel in process.kernels:
+            rows.append(gpu_debug_kernel_row(process, kernel))
+    return rows or [("", "Counter backend", "", "", "", "", "", "", debug_snapshot.status or "-")]
+
+
+def gpu_debug_process_row(process: ProcessDebugCounters) -> tuple[str, str, str, str, str, str, str, str, str]:
+    return (
+        str(process.pid),
+        process.command or "-",
+        str(process.dispatches) if process.dispatches else "-",
+        debug_count_text(process.waves),
+        debug_count_text(process.instructions),
+        debug_percent_text(process.l2_hit_percent),
+        debug_bytes_rate_text(process.read_bytes, process.sample_seconds),
+        debug_bytes_rate_text(process.write_bytes, process.sample_seconds),
+        process.status or "-",
+    )
+
+
+def gpu_debug_kernel_row(
+    process: ProcessDebugCounters,
+    kernel: KernelDebugCounters,
+) -> tuple[str, str, str, str, str, str, str, str, str]:
+    return (
+        "",
+        f"  {kernel.name}",
+        str(kernel.dispatches) if kernel.dispatches else "-",
+        debug_count_text(kernel.waves),
+        debug_count_text(kernel.instructions),
+        debug_percent_text(kernel.l2_hit_percent),
+        debug_bytes_rate_text(kernel.read_bytes, process.sample_seconds),
+        debug_bytes_rate_text(kernel.write_bytes, process.sample_seconds),
+        "",
+    )
+
+
+def debug_count_text(value: float | None) -> str:
+    if value is None:
+        return "-"
+    absolute = abs(value)
+    if absolute >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+    if absolute >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+    if absolute >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.1f}"
+
+
+def debug_percent_text(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{clamp_percent(value):.1f}%"
+
+
+def debug_bytes_rate_text(value: float | None, sample_seconds: float) -> str:
+    if value is None:
+        return "-"
+    seconds = max(0.001, sample_seconds)
+    return f"{debug_bytes_text(value)} {debug_bytes_text(value / seconds)}/s"
+
+
+def debug_bytes_text(value: float | None) -> str:
+    if value is None:
+        return "-"
+    absolute = abs(value)
+    if absolute >= 1024**3:
+        return f"{value / 1024**3:.2f}GiB"
+    if absolute >= 1024**2:
+        return f"{value / 1024**2:.1f}MiB"
+    if absolute >= 1024:
+        return f"{value / 1024:.1f}KiB"
+    return f"{value:.0f}B"
 
 
 def render_gpu_table(

@@ -10,11 +10,13 @@ from rich.text import Text
 
 import roctop.render as render
 from roctop.cli import handle_key_batch
+from roctop.debug_counters import GpuDebugCounters, KernelDebugCounters, ProcessDebugCounters
 from roctop.history import GpuMetricSample, MetricSample, MetricsHistory
 from roctop.interaction import (
     KEY_DOWN,
     KEY_UP,
     MODE_FILTER,
+    MODE_GPU_DEBUG,
     MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_PROCESS_INFO,
@@ -1311,6 +1313,78 @@ class RenderTests(unittest.TestCase):
             value_positions.append(line.index("/opt/conda"))
 
         self.assertEqual(value_positions[0], value_positions[1])
+
+    def test_gpu_debug_popup_renders_process_and_kernel_counters(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=42, args="python train.py")],
+        )
+        state = ProcessViewState(mode=MODE_GPU_DEBUG, gpu_filter_index=0)
+        state.gpu_debug_snapshot = GpuDebugCounters(
+            gpu_index=0,
+            sampled_at=datetime(2026, 6, 22, 12, 0, 1),
+            status="Sampled 1/1 process(es)",
+            counters=("SQ_WAVES", "SQ_INSTS", "L2CacheHit", "FETCH_SIZE", "WRITE_SIZE"),
+            processes=(
+                ProcessDebugCounters(
+                    pid=42,
+                    command="python train.py",
+                    status="ok",
+                    sample_seconds=1.0,
+                    dispatches=2,
+                    waves=10,
+                    instructions=100,
+                    l2_hit_percent=87.5,
+                    read_bytes=2 * 1024 * 1024,
+                    write_bytes=1024 * 1024,
+                    kernels=(
+                        KernelDebugCounters(
+                            name="kernel_a",
+                            dispatches=2,
+                            waves=10,
+                            instructions=100,
+                            l2_hit_percent=87.5,
+                            read_bytes=2 * 1024 * 1024,
+                            write_bytes=1024 * 1024,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        console = Console(width=160, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=45, terminal_width=160))
+        plain = console.export_text(clear=False)
+
+        self.assertIn("GPU Debug Counters  GPU 0", plain)
+        self.assertIn("Instr issued", plain)
+        self.assertIn("python train.py", plain)
+        self.assertIn("kernel_a", plain)
+        self.assertIn("87.5%", plain)
+        self.assertIn("d/Esc: close", plain)
+
+    def test_gpu_debug_popup_renders_backend_unavailable_state(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0)],
+            processes=[],
+        )
+        state = ProcessViewState(mode=MODE_GPU_DEBUG, gpu_filter_index=0)
+        state.gpu_debug_snapshot = GpuDebugCounters(
+            gpu_index=0,
+            sampled_at=datetime(2026, 6, 22, 12, 0, 1),
+            status="Debug backend unavailable: rocprofv3 not found",
+        )
+
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=45, terminal_width=140))
+        plain = console.export_text(clear=False)
+
+        self.assertIn("GPU Debug Counters  GPU 0", plain)
+        self.assertIn("Counter backend", plain)
+        self.assertIn("rocprofv3", plain)
+        self.assertIn("not found", plain)
 
     def test_process_sort_indicator_renders_on_sorted_column_header(self) -> None:
         processes = [

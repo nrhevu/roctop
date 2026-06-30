@@ -14,6 +14,7 @@ from rich.live import Live
 
 from . import __version__
 from .collectors import CollectionError, CommandInterrupted, CommandTimeout, collect_snapshot, read_process_detail
+from .debug_counters import GpuDebugCounters, collect_gpu_debug_counters
 from .history import GpuMetricSample, MetricSample, MetricsHistory
 from .interaction import (
     KEY_DOWN,
@@ -24,6 +25,7 @@ from .interaction import (
     KEY_RIGHT,
     KEY_UP,
     MODE_FILTER,
+    MODE_GPU_DEBUG,
     MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_NORMAL,
@@ -40,6 +42,9 @@ from .render import GRAPH_COLUMNS_PER_CELL, GRAPH_HISTORY_SECONDS, GPU_GRAPH_WID
 
 KEY_POLL_SECONDS = 0.05
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
+GPU_DEBUG_COLLECTOR_STOP_JOIN_SECONDS = 0.05
+GPU_DEBUG_IDLE_SECONDS = 0.05
+GPU_DEBUG_SAMPLE_PAUSE_SECONDS = 0.1
 GRAPH_FRAME_SECONDS = 1.0
 GRAPH_HISTORY_BUCKETS = GRAPH_HISTORY_SECONDS + 1
 GRAPH_HISTORY_LABEL_GUTTER_SECONDS = (len(f"{GRAPH_HISTORY_SECONDS}s") + 1) * GRAPH_COLUMNS_PER_CELL
@@ -56,6 +61,12 @@ GRAPH_METRIC_FIELDS = (
 class SnapshotUpdate:
     sequence: int
     snapshot: Snapshot
+
+
+@dataclass(slots=True)
+class GpuDebugUpdate:
+    sequence: int
+    debug_snapshot: GpuDebugCounters
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +143,58 @@ class BackgroundSnapshotCollector:
                     self._sequence += 1
                     self._latest = SnapshotUpdate(sequence=self._sequence, snapshot=snapshot)
             next_collect_at = collect_started_at + self.interval
+
+
+class BackgroundGpuDebugCollector:
+    def __init__(
+        self,
+        collect_func: Callable[[Snapshot, int], GpuDebugCounters] | None = None,
+    ) -> None:
+        self.collect_func = collect_func or collect_gpu_debug_counters
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._target_snapshot: Snapshot | None = None
+        self._target_gpu_index: int | None = None
+        self._latest: GpuDebugUpdate | None = None
+        self._sequence = 0
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="roctop-gpu-debug", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=GPU_DEBUG_COLLECTOR_STOP_JOIN_SECONDS)
+
+    def update_target(self, snapshot: Snapshot, gpu_index: int) -> None:
+        with self._lock:
+            self._target_snapshot = snapshot
+            self._target_gpu_index = gpu_index
+
+    def latest_after(self, sequence: int) -> GpuDebugUpdate | None:
+        with self._lock:
+            if self._latest is None or self._latest.sequence <= sequence:
+                return None
+            return self._latest
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._lock:
+                snapshot = self._target_snapshot
+                gpu_index = self._target_gpu_index
+            if snapshot is None or gpu_index is None:
+                self._stop.wait(GPU_DEBUG_IDLE_SECONDS)
+                continue
+
+            debug_snapshot = self.collect_func(snapshot, gpu_index)
+            with self._lock:
+                self._sequence += 1
+                self._latest = GpuDebugUpdate(sequence=self._sequence, debug_snapshot=debug_snapshot)
+            self._stop.wait(GPU_DEBUG_SAMPLE_PAUSE_SECONDS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -238,9 +301,12 @@ def poll_live_until_quit(
     interval: float,
     display_time: datetime | None = None,
     graph_frame: GraphFrame | None = None,
+    debug_collector_factory: Callable[[], BackgroundGpuDebugCollector] = BackgroundGpuDebugCollector,
 ) -> None:
     rendered_size = console_dimensions(console)
     latest_sequence = 0
+    latest_debug_sequence = 0
+    debug_collector: BackgroundGpuDebugCollector | None = None
     render_interval = live_render_interval(interval)
     graph_interval = graph_frame_interval(interval)
     next_render_at = time.monotonic() + render_interval
@@ -254,6 +320,27 @@ def poll_live_until_quit(
             snapshot = update.snapshot
             latest_sequence = update.sequence
 
+        debug_update_received = False
+        if process_state.mode == MODE_GPU_DEBUG and process_state.gpu_filter_index is not None:
+            if debug_collector is None:
+                debug_collector = debug_collector_factory()
+                debug_collector.start()
+                latest_debug_sequence = 0
+                process_state.gpu_debug_snapshot = None
+            debug_collector.update_target(snapshot, process_state.gpu_filter_index)
+        elif debug_collector is not None:
+            debug_collector.stop()
+            debug_collector = None
+            latest_debug_sequence = 0
+            process_state.gpu_debug_snapshot = None
+
+        if debug_collector is not None:
+            debug_update = debug_collector.latest_after(latest_debug_sequence)
+            if debug_update is not None:
+                latest_debug_sequence = debug_update.sequence
+                process_state.gpu_debug_snapshot = debug_update.debug_snapshot
+                debug_update_received = True
+
         now = time.monotonic()
         current_size = console_dimensions(console)
         status_expired = process_state.expire_status_message(now)
@@ -263,7 +350,7 @@ def poll_live_until_quit(
             display_time = datetime.now()
         if graph_due:
             graph_frame = advance_graph_frame(history, graph_frame, display_time)
-        if current_size != rendered_size or status_expired or refresh_due or graph_due:
+        if current_size != rendered_size or status_expired or refresh_due or graph_due or debug_update_received:
             live.update(
                 render_live_snapshot(
                     snapshot,
@@ -296,6 +383,18 @@ def poll_live_until_quit(
             graph_frame=graph_frame,
             terminal_width=console_dimensions(console)[1],
         )
+        if process_state.mode == MODE_GPU_DEBUG and process_state.gpu_filter_index is not None:
+            if debug_collector is None:
+                debug_collector = debug_collector_factory()
+                debug_collector.start()
+                latest_debug_sequence = 0
+                process_state.gpu_debug_snapshot = None
+            debug_collector.update_target(snapshot, process_state.gpu_filter_index)
+        elif debug_collector is not None:
+            debug_collector.stop()
+            debug_collector = None
+            latest_debug_sequence = 0
+            process_state.gpu_debug_snapshot = None
         rendered_size = console_dimensions(console)
         live.update(
             render_live_snapshot(
@@ -311,6 +410,8 @@ def poll_live_until_quit(
             refresh=True,
         )
         if quit_requested:
+            if debug_collector is not None:
+                debug_collector.stop()
             return
 
 
@@ -457,6 +558,8 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
     if process_state.mode == MODE_HELP:
         return False
     if process_state.mode == MODE_PROCESS_INFO:
+        return False
+    if process_state.mode == MODE_GPU_DEBUG:
         return False
     if process_state.mode == MODE_SORT_MENU:
         return False

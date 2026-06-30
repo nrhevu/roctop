@@ -12,7 +12,18 @@ from rich.console import Console
 
 from roctop import cli
 from roctop.collectors import CommandInterrupted, CommandTimeout
-from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP, MODE_HELP, MODE_NORMAL, MODE_PROCESS_INFO
+from roctop.interaction import (
+    KEY_CTRL_C,
+    KEY_DOWN,
+    KEY_ENTER,
+    KEY_LEFT,
+    KEY_RIGHT,
+    KEY_UP,
+    MODE_GPU_DEBUG,
+    MODE_HELP,
+    MODE_NORMAL,
+    MODE_PROCESS_INFO,
+)
 from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 
 
@@ -1014,6 +1025,140 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.sort_field, "cpu")
         self.assertTrue(state.sort_desc)
         self.assertEqual(state.selected_pid, 3)
+
+    def test_live_loop_starts_and_stops_debug_collector_only_while_debug_is_open(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=120)
+
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.keys = iter((["0"], ["d"], ["d"], ["q"]))
+
+            def read_keys(self, timeout: float):
+                return next(self.keys)
+
+        class FakeLive:
+            def update(self, renderable, refresh: bool = False) -> None:
+                return None
+
+        class FakeSnapshotCollector:
+            def raise_if_failed(self) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        class FakeDebugCollector:
+            def __init__(self) -> None:
+                self.started = 0
+                self.stopped = 0
+                self.targets: list[int] = []
+                created.append(self)
+
+            def start(self) -> None:
+                self.started += 1
+
+            def stop(self) -> None:
+                self.stopped += 1
+
+            def update_target(self, snapshot: Snapshot, gpu_index: int) -> None:
+                self.targets.append(gpu_index)
+
+            def latest_after(self, sequence: int):
+                return None
+
+        created: list[FakeDebugCollector] = []
+        state = cli.ProcessViewState()
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=42, args="python train.py")],
+        )
+
+        cli.poll_live_until_quit(
+            FakeLive(),
+            FakeKeyboard(),
+            snapshot,
+            cli.MetricsHistory(max_samples=120),
+            state,
+            FakeConsole(),
+            FakeSnapshotCollector(),
+            interval=1.0,
+            debug_collector_factory=FakeDebugCollector,
+        )
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].started, 1)
+        self.assertEqual(created[0].stopped, 1)
+        self.assertIn(0, created[0].targets)
+        self.assertEqual(state.mode, MODE_NORMAL)
+
+    def test_live_loop_stops_debug_collector_on_quit_from_debug_mode(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=120)
+
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.keys = iter((["0"], ["d"], [KEY_CTRL_C]))
+
+            def read_keys(self, timeout: float):
+                return next(self.keys)
+
+        class FakeLive:
+            def update(self, renderable, refresh: bool = False) -> None:
+                return None
+
+        class FakeSnapshotCollector:
+            def raise_if_failed(self) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        class FakeDebugCollector:
+            def __init__(self) -> None:
+                self.stopped = 0
+                created.append(self)
+
+            def start(self) -> None:
+                return None
+
+            def stop(self) -> None:
+                self.stopped += 1
+
+            def update_target(self, snapshot: Snapshot, gpu_index: int) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        created: list[FakeDebugCollector] = []
+        state = cli.ProcessViewState()
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=42, args="python train.py")],
+        )
+
+        cli.poll_live_until_quit(
+            FakeLive(),
+            FakeKeyboard(),
+            snapshot,
+            cli.MetricsHistory(max_samples=120),
+            state,
+            FakeConsole(),
+            FakeSnapshotCollector(),
+            interval=1.0,
+            debug_collector_factory=FakeDebugCollector,
+        )
+
+        self.assertEqual(state.mode, MODE_GPU_DEBUG)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].stopped, 1)
 
     def test_handle_key_batch_filters_before_sort_and_selection(self) -> None:
         state = cli.ProcessViewState(selected_pid=2, sort_field="cpu", sort_desc=True)

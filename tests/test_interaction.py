@@ -15,6 +15,7 @@ from roctop.interaction import (
     KEY_RIGHT,
     KEY_UP,
     MODE_FILTER,
+    MODE_GPU_DEBUG,
     MODE_HELP,
     MODE_KILL_CONFIRM,
     MODE_NORMAL,
@@ -26,6 +27,7 @@ from roctop.interaction import (
     TerminalKeyboard,
     elapsed_seconds,
     max_help_scroll_offset,
+    max_gpu_debug_scroll_offset,
     max_process_info_scroll_offset,
     parse_keys,
 )
@@ -175,6 +177,36 @@ class InteractionTests(unittest.TestCase):
 
         state.handle_key("g", processes)
         self.assertFalse(state.gpu_graphs_visible)
+
+    def test_d_requires_gpu_focus_before_opening_debug_view(self) -> None:
+        state = ProcessViewState()
+        result = state.handle_key("d", [proc(100)], gpu_indices=(0,))
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertIn("Focus a GPU first", state.status_message)
+
+    def test_d_opens_closes_and_scrolls_debug_view(self) -> None:
+        state = ProcessViewState(gpu_filter_index=0)
+        processes = [proc(100)]
+
+        result = state.handle_key("d", processes, gpu_indices=(0,))
+        self.assertTrue(result.changed)
+        self.assertEqual(state.mode, MODE_GPU_DEBUG)
+
+        state.gpu_debug_render_row_count = 30
+        state.handle_key("j", processes)
+        self.assertEqual(state.gpu_debug_scroll_offset, 1)
+        state.handle_key("l", processes)
+        self.assertEqual(state.gpu_debug_scroll_offset, max_gpu_debug_scroll_offset(state))
+        state.handle_key("h", processes)
+        self.assertEqual(state.gpu_debug_scroll_offset, 0)
+        state.handle_key("d", processes)
+        self.assertEqual(state.mode, MODE_NORMAL)
+
+        state.handle_key("d", processes, gpu_indices=(0,))
+        state.handle_key("esc", processes)
+        self.assertEqual(state.mode, MODE_NORMAL)
 
     def test_cursor_tracks_selected_pid_after_sort_refresh(self) -> None:
         processes = [

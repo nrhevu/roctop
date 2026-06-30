@@ -40,6 +40,7 @@ MODE_SEARCH = "search"
 MODE_FILTER = "filter"
 MODE_HELP = "help"
 MODE_PROCESS_INFO = "process_info"
+MODE_GPU_DEBUG = "gpu_debug"
 
 KILL_CONFIRM_CANCEL = "cancel"
 KILL_CONFIRM_SIGTERM = "sigterm"
@@ -93,6 +94,7 @@ DEFAULT_DESCENDING_SORTS = {
 STATUS_MESSAGE_SECONDS = 3.0
 HELP_VISIBLE_ROWS = 22
 PROCESS_INFO_VISIBLE_ROWS = 24
+GPU_DEBUG_VISIBLE_ROWS = 22
 HELP_ENTRIES = (
     ("?", "Open help / close help", "normal, help"),
     ("k/j or Up/Down", "Scroll popup one row", "help, inspect"),
@@ -117,6 +119,7 @@ HELP_ENTRIES = (
     ("l / Right", "Jump to next sibling", "tree"),
     ("x", "Open kill confirmation", "normal"),
     ("i", "Inspect selected process", "normal"),
+    ("d", "Open GPU debug counters", "normal"),
     ("y", "Send SIGTERM in kill confirmation", "kill"),
     ("q", "Quit or cancel menu", "normal, menus"),
     ("Ctrl-C", "Quit", "all"),
@@ -153,6 +156,9 @@ class ProcessViewState:
     process_info_parent: ProcessInfo | None = None
     process_info_child_count: int = 0
     process_info_render_row_count: int = 0
+    gpu_debug_snapshot: object | None = None
+    gpu_debug_scroll_offset: int = 0
+    gpu_debug_render_row_count: int = 0
     search_query: str = ""
     search_input: str = ""
     filter_query: str = ""
@@ -294,6 +300,9 @@ class ProcessViewState:
         if self.mode == MODE_PROCESS_INFO:
             return self.handle_process_info_key(key)
 
+        if self.mode == MODE_GPU_DEBUG:
+            return self.handle_gpu_debug_key(key)
+
         if key == "z":
             self.process_zoomed = not self.process_zoomed
             self.clear_status_message()
@@ -333,6 +342,15 @@ class ProcessViewState:
         if key == "?":
             self.mode = MODE_HELP
             self.help_scroll_offset = 0
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key == "d":
+            if self.gpu_filter_index is None:
+                self.set_status_message("Focus a GPU first with 0-9")
+                return KeyResult(changed=True)
+            self.mode = MODE_GPU_DEBUG
+            self.gpu_debug_scroll_offset = 0
+            self.gpu_debug_render_row_count = 0
             self.clear_status_message()
             return KeyResult(changed=True)
         if key in ("h", KEY_LEFT) and self.tree_mode:
@@ -381,6 +399,31 @@ class ProcessViewState:
                 self.set_status_message("No process selected")
             else:
                 self.open_kill_confirm(selected)
+            return KeyResult(changed=True)
+        return KeyResult()
+
+    def handle_gpu_debug_key(self, key: str) -> KeyResult:
+        if key in (KEY_ESC, "d"):
+            self.mode = MODE_NORMAL
+            self.clear_status_message()
+            return KeyResult(changed=True)
+        if key in ("k", KEY_UP):
+            self.gpu_debug_scroll_offset = max(0, self.gpu_debug_scroll_offset - 1)
+            return KeyResult(changed=True)
+        if key in ("j", KEY_DOWN):
+            self.gpu_debug_scroll_offset = min(
+                max_gpu_debug_scroll_offset(self),
+                self.gpu_debug_scroll_offset + 1,
+            )
+            return KeyResult(changed=True)
+        if key in ("h", KEY_LEFT):
+            self.gpu_debug_scroll_offset = max(0, self.gpu_debug_scroll_offset - GPU_DEBUG_VISIBLE_ROWS)
+            return KeyResult(changed=True)
+        if key in ("l", KEY_RIGHT):
+            self.gpu_debug_scroll_offset = min(
+                max_gpu_debug_scroll_offset(self),
+                self.gpu_debug_scroll_offset + GPU_DEBUG_VISIBLE_ROWS,
+            )
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -1058,6 +1101,10 @@ def max_help_scroll_offset() -> int:
 def max_process_info_scroll_offset(process_state: ProcessViewState) -> int:
     row_count = process_state.process_info_render_row_count or process_info_row_count(process_state)
     return max(0, row_count - PROCESS_INFO_VISIBLE_ROWS)
+
+
+def max_gpu_debug_scroll_offset(process_state: ProcessViewState) -> int:
+    return max(0, process_state.gpu_debug_render_row_count - GPU_DEBUG_VISIBLE_ROWS)
 
 
 def process_info_row_count(process_state: ProcessViewState) -> int:
