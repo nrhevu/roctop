@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import threading
 import time
 import unittest
@@ -1032,6 +1033,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(state.filter_query, "train")
         self.assertEqual([row.pid for row in processes], [3, 1])
         self.assertEqual(state.selected_pid, 3)
+
+    def test_handle_key_batch_kills_selected_pids_hidden_by_filter(self) -> None:
+        state = cli.ProcessViewState(
+            selected_pid=2,
+            selected_pids={1, 2},
+            filter_query="serve",
+            filter_input="serve",
+        )
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[
+                ProcessInfo(gpu_index=0, pid=1, args="train-low"),
+                ProcessInfo(gpu_index=0, pid=2, args="serve-high"),
+            ],
+        )
+        calls: list[tuple[int, signal.Signals]] = []
+
+        with patch("roctop.interaction.kill_process", side_effect=lambda pid, sig: calls.append((pid, sig))):
+            quit_requested, processes = cli.handle_key_batch(snapshot, state, ["x", "y"])
+
+        self.assertFalse(quit_requested)
+        self.assertEqual(calls, [(1, signal.SIGTERM), (2, signal.SIGTERM)])
+        self.assertEqual([row.pid for row in processes], [2])
+        self.assertEqual(state.selected_pids, set())
 
     def test_handle_key_batch_escape_clears_active_filter(self) -> None:
         state = cli.ProcessViewState(filter_query="train", filter_input="train", gpu_filter_index=0)

@@ -48,6 +48,8 @@ DRACULA_TRACK = "#3a3a3a"
 DRACULA_DIM = "#6272a4"
 DRACULA_FG = "#f8f8f2"
 DRACULA_BG = "#282a36"
+DRACULA_SELECTED_BG = "#4f98a3"
+DRACULA_SELECTED_CURSOR_BG = "#477982"
 DRACULA_SELECTION_BG = "#44475a"
 DRACULA_SELECTION_FG = DRACULA_FG
 SORT_MENU_SELECTION_BG = DRACULA_CYAN
@@ -470,13 +472,14 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
     ]
     if gpu_keys:
         navigation_rows.append((gpu_keys, "focus GPU"))
-    navigation_rows.append(("Esc", "clear filter or cancel active mode"))
+    navigation_rows.append(("Esc", "clear selection/filter or cancel active mode"))
     process_view_rows = [
         ("s", "sort processes"),
         ("t", "toggle process tree"),
         ("z", "zoom process table"),
         ("i", "inspect selected process"),
-        ("x", "kill selected process"),
+        ("Space", "select process"),
+        ("x", "kill selected/current process"),
         ("q", "quit or cancel menu"),
     ]
     search_rows = [
@@ -1647,13 +1650,26 @@ def render_process_table(
             metric_text(proc.host_mem_percent, digits=1),
             process_elapsed_text(proc.elapsed, elapsed_offset_seconds),
             command_cell,
-            style=(
-                f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}"
-                if selected_visible_index == visible_index
-                else None
-            ),
+            style=process_row_style(proc, process_state, visible_index, selected_visible_index),
         )
     return table
+
+
+def process_row_style(
+    proc: ProcessInfo,
+    process_state: ProcessViewState | None,
+    visible_index: int,
+    selected_visible_index: int | None,
+) -> str | None:
+    if process_state is None:
+        return None
+    if selected_visible_index == visible_index:
+        if proc.pid in process_state.selected_pids:
+            return f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTED_CURSOR_BG}"
+        return f"bold {DRACULA_SELECTION_FG} on {DRACULA_SELECTION_BG}"
+    if proc.pid in process_state.selected_pids:
+        return f"on {DRACULA_SELECTED_BG}"
+    return None
 
 
 def render_process_title(process_state: ProcessViewState, process_count: int) -> Text:
@@ -1703,11 +1719,13 @@ def render_kill_confirm_menu(process_state: ProcessViewState) -> Text | None:
     if process_state.mode != MODE_KILL_CONFIRM:
         return None
     menu = Text(no_wrap=True, overflow="ellipsis")
-    target_pid = process_state.kill_confirm_pid if process_state.kill_confirm_pid is not None else process_state.selected_pid
-    if target_pid is None:
+    target_pids = process_state.kill_target_pids()
+    if not target_pids:
         menu.append("Kill process: ", style=f"bold {DRACULA_RED}")
+    elif len(target_pids) == 1:
+        menu.append(f"Kill PID {target_pids[0]}: ", style=f"bold {DRACULA_RED}")
     else:
-        menu.append(f"Kill PID {target_pid}: ", style=f"bold {DRACULA_RED}")
+        menu.append(f"Kill {len(target_pids)} selected PIDs: ", style=f"bold {DRACULA_RED}")
     for index, option in enumerate(KILL_CONFIRM_OPTIONS):
         if index:
             menu.append("   ")
@@ -1833,7 +1851,10 @@ def format_process_elapsed_seconds(total_seconds: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
-def process_table_command_width(terminal_width: int | None, metadata_widths: Sequence[int]) -> int:
+def process_table_command_width(
+    terminal_width: int | None,
+    metadata_widths: Sequence[int],
+) -> int:
     if terminal_width is None:
         return estimate_process_command_width(terminal_width)
     table_chrome_width = PROCESS_TABLE_COLUMN_COUNT + 1 + PROCESS_TABLE_COLUMN_COUNT * PROCESS_TABLE_CELL_PADDING_WIDTH

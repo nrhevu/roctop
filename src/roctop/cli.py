@@ -381,6 +381,7 @@ def handle_key_batch(
                 processes,
                 processes_synced=True,
                 gpu_indices=gpu_indices,
+                all_processes=snapshot.processes,
             )
             quit_requested = quit_requested or result.quit
             if process_view_key(process_state) != view_before:
@@ -480,6 +481,7 @@ def key_needs_current_processes(process_state: ProcessViewState, key: str) -> bo
         KEY_PAGE_DOWN,
         "n",
         "N",
+        " ",
         "x",
         "p",
     )

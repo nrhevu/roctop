@@ -697,6 +697,77 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.filter_query, "g")
         self.assertFalse(state.gpu_graphs_visible)
 
+    def test_space_toggles_selected_pid_and_preserves_selection_across_filter(self) -> None:
+        processes = [
+            proc(100, args="demo::trainer"),
+            proc(101, args="demo::serve"),
+        ]
+        state = ProcessViewState(selected_pid=100, viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key(" ", processes, processes_synced=True)
+        self.assertEqual(state.selected_pids, {100})
+        self.assertIn("Selected: 1", state.caption())
+
+        state.filter_query = "serve"
+        state.filter_input = "serve"
+        filtered = state.display_processes(processes)
+        state.sync(filtered)
+        self.assertEqual([row.pid for row in filtered], [101])
+        self.assertEqual(state.selected_pids, {100})
+
+        state.handle_key(" ", filtered, processes_synced=True)
+        self.assertEqual(state.selected_pids, {100, 101})
+        state.handle_key(" ", filtered, processes_synced=True)
+        self.assertEqual(state.selected_pids, {100})
+
+    def test_escape_clears_selected_pids_before_filter(self) -> None:
+        processes = [proc(100, args="demo::trainer"), proc(101, args="demo::serve")]
+        state = ProcessViewState(
+            selected_pids={100},
+            filter_query="serve",
+            filter_input="serve",
+            viewport_rows=3,
+        )
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.selected_pids, set())
+        self.assertEqual(state.filter_query, "serve")
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.filter_query, "")
+
+    def test_space_remains_text_input_in_search_and_filter_modes(self) -> None:
+        processes = [proc(100, args="demo::rank-space")]
+        state = ProcessViewState(viewport_rows=3)
+
+        state.handle_key("/", processes)
+        state.handle_key(" ", processes)
+
+        self.assertEqual(state.mode, MODE_SEARCH)
+        self.assertEqual(state.search_input, " ")
+        self.assertEqual(state.selected_pids, set())
+
+        state.handle_key("esc", processes)
+        state.handle_key("f", processes)
+        state.handle_key(" ", processes)
+
+        self.assertEqual(state.mode, MODE_FILTER)
+        self.assertEqual(state.filter_input, " ")
+        self.assertEqual(state.selected_pids, set())
+
+    def test_space_without_process_sets_status_message(self) -> None:
+        state = ProcessViewState(viewport_rows=3)
+
+        state.handle_key(" ", [], processes_synced=True)
+
+        self.assertEqual(state.selected_pids, set())
+        self.assertEqual(state.status_message, "No process selected")
+
     def test_search_next_and_previous_wrap_in_sorted_order(self) -> None:
         processes = [
             proc(1, cpu_percent=10.0, args="demo::worker low"),
@@ -791,6 +862,54 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(state.mode, MODE_NORMAL)
         self.assertIsNone(state.kill_confirm_pid)
         self.assertEqual(state.status_message, "PID 42 is no longer running")
+
+    def test_kill_confirm_uses_selected_pids_and_clears_them_after_confirm(self) -> None:
+        processes = [proc(41), proc(42), proc(43)]
+        calls: list[tuple[int, signal.Signals]] = []
+        state = ProcessViewState(selected_pids={43, 41}, viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("x", processes, processes_synced=True)
+        self.assertEqual(state.mode, MODE_KILL_CONFIRM)
+        self.assertIsNone(state.kill_confirm_pid)
+        self.assertEqual(state.kill_confirm_pids, (41, 43))
+
+        state.handle_key("y", processes, kill_func=lambda pid, sig: calls.append((pid, sig)))
+
+        self.assertEqual(calls, [(41, signal.SIGTERM), (43, signal.SIGTERM)])
+        self.assertEqual(state.mode, MODE_NORMAL)
+        self.assertEqual(state.selected_pids, set())
+        self.assertEqual(state.status_message, "Sent SIGTERM to 2 PIDs")
+
+    def test_kill_confirm_selected_pids_can_send_sigkill_and_dedupes_duplicate_rows(self) -> None:
+        processes = [proc(42, gpu_index=0), proc(42, gpu_index=1), proc(43)]
+        calls: list[tuple[int, signal.Signals]] = []
+        state = ProcessViewState(selected_pids={42, 43}, viewport_rows=3)
+        state.sync(processes)
+
+        state.handle_key("x", processes, processes_synced=True)
+        state.handle_key(KEY_RIGHT, processes)
+        state.handle_key(KEY_RIGHT, processes)
+        state.handle_key(KEY_ENTER, processes, kill_func=lambda pid, sig: calls.append((pid, sig)))
+
+        self.assertEqual(calls, [(42, signal.SIGKILL), (43, signal.SIGKILL)])
+        self.assertEqual(state.selected_pids, set())
+        self.assertEqual(state.status_message, "Sent SIGKILL to 2 PIDs")
+
+    def test_kill_confirm_reports_stale_selected_pids_from_current_snapshot(self) -> None:
+        old_processes = [proc(42), proc(43)]
+        new_processes = [proc(43)]
+        calls: list[tuple[int, signal.Signals]] = []
+        state = ProcessViewState(selected_pids={42, 43}, viewport_rows=3)
+        state.sync(old_processes)
+
+        state.handle_key("x", old_processes, processes_synced=True)
+        state.handle_key("y", new_processes, kill_func=lambda pid, sig: calls.append((pid, sig)))
+
+        self.assertEqual(calls, [(43, signal.SIGTERM)])
+        self.assertEqual(state.selected_pids, set())
+        self.assertIn("Sent SIGTERM to 1 PID", state.status_message)
+        self.assertIn("skipped 1 no longer running", state.status_message)
 
     def test_kill_confirm_uses_h_l_for_left_right(self) -> None:
         processes = [proc(42)]

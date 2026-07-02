@@ -7,7 +7,7 @@ import sys
 import termios
 import time
 import tty
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
 from .models import ProcessDetailInfo, ProcessInfo
@@ -99,6 +99,7 @@ HELP_ENTRIES = (
     ("h/l or Left/Right", "Page popup up/down", "help, inspect"),
     ("j/k or Up/Down", "Move process cursor", "normal"),
     ("PgUp/PgDn", "Move process cursor by page", "normal"),
+    ("Space", "Select or deselect process", "normal"),
     ("s", "Open sort menu", "normal"),
     ("h/l or arrows", "Move sort/kill menu selection", "sort, kill"),
     ("Enter", "Apply selected sort or kill option", "sort, kill"),
@@ -110,7 +111,7 @@ HELP_ENTRIES = (
     ("g", "Toggle GPU graphs", "normal"),
     (",/.", "Pan graph older/newer", "normal"),
     ("r", "Reset graph to live", "normal"),
-    ("Esc", "Clear filter or cancel active mode", "normal, menus"),
+    ("Esc", "Clear selection/filter or cancel active mode", "normal, menus"),
     ("t", "Toggle process tree", "normal"),
     ("p", "Jump to parent process", "tree"),
     ("h / Left", "Jump to previous sibling", "tree"),
@@ -134,6 +135,7 @@ class KeyResult:
 class ProcessViewState:
     selected_pid: int | None = None
     selected_process_key: ProcessSelectionKey | None = None
+    selected_pids: set[int] = field(default_factory=set)
     selected_index: int = 0
     scroll_offset: int = 0
     sort_field: str = SORT_DEFAULT
@@ -142,6 +144,7 @@ class ProcessViewState:
     sort_menu_index: int = 0
     kill_confirm_index: int = 0
     kill_confirm_pid: int | None = None
+    kill_confirm_pids: tuple[int, ...] = ()
     status_message: str = ""
     status_message_expires_at: float | None = None
     viewport_rows: int = 8
@@ -263,9 +266,11 @@ class ProcessViewState:
         kill_func: Callable[[int, signal.Signals], None] = None,
         processes_synced: bool = False,
         gpu_indices: Iterable[int] | None = None,
+        all_processes: Iterable[ProcessInfo] | None = None,
     ) -> KeyResult:
         kill_func = kill_func or kill_process
         source_processes = processes
+        current_processes = list(all_processes) if all_processes is not None else source_processes
         if not processes_synced:
             processes = self.display_processes(source_processes)
             self.sync(processes)
@@ -274,7 +279,7 @@ class ProcessViewState:
             return KeyResult(quit=True, changed=True)
 
         if self.mode == MODE_KILL_CONFIRM:
-            return self.handle_kill_confirm_key(key, processes, kill_func, processes_synced=True)
+            return self.handle_kill_confirm_key(key, current_processes, kill_func, processes_synced=True)
 
         if self.mode == MODE_SORT_MENU:
             return self.handle_sort_menu_key(key)
@@ -294,6 +299,9 @@ class ProcessViewState:
         if self.mode == MODE_PROCESS_INFO:
             return self.handle_process_info_key(key)
 
+        if key == " ":
+            self.toggle_selected_process(processes)
+            return KeyResult(changed=True)
         if key == "z":
             self.process_zoomed = not self.process_zoomed
             self.clear_status_message()
@@ -309,6 +317,10 @@ class ProcessViewState:
                     self.sync(self.display_processes(source_processes))
                 return KeyResult(changed=True)
             return KeyResult()
+
+        if key == KEY_ESC and self.selected_pids:
+            self.clear_selected_processes()
+            return KeyResult(changed=True)
 
         if key == KEY_ESC and self.has_filter():
             self.clear_filter()
@@ -375,25 +387,70 @@ class ProcessViewState:
             self.search_next(processes, direction=-1, processes_synced=True)
             return KeyResult(changed=True)
         if key == "x":
-            selected = self.selected_synced_process(processes)
-            if selected is None:
-                self.kill_confirm_pid = None
-                self.set_status_message("No process selected")
+            if self.selected_pids:
+                self.open_kill_confirm_pids(self.ordered_selected_pids(current_processes))
             else:
-                self.open_kill_confirm(selected)
+                selected = self.selected_synced_process(processes)
+                if selected is None:
+                    self.kill_confirm_pid = None
+                    self.kill_confirm_pids = ()
+                    self.set_status_message("No process selected")
+                else:
+                    self.open_kill_confirm(selected)
             return KeyResult(changed=True)
         return KeyResult()
 
+    def toggle_selected_process(self, processes: list[ProcessInfo]) -> None:
+        selected = self.selected_synced_process(processes)
+        if selected is None:
+            self.set_status_message("No process selected")
+            return
+        if selected.pid in self.selected_pids:
+            self.selected_pids.remove(selected.pid)
+        else:
+            self.selected_pids.add(selected.pid)
+        self.clear_status_message()
+
+    def clear_selected_processes(self) -> None:
+        self.selected_pids.clear()
+        self.clear_status_message()
+
+    def ordered_selected_pids(self, processes: Iterable[ProcessInfo]) -> tuple[int, ...]:
+        ordered: list[int] = []
+        seen: set[int] = set()
+        for proc in processes:
+            if proc.pid not in self.selected_pids or proc.pid in seen:
+                continue
+            ordered.append(proc.pid)
+            seen.add(proc.pid)
+        missing = sorted(self.selected_pids - seen)
+        return tuple([*ordered, *missing])
+
     def open_kill_confirm(self, process: ProcessInfo) -> None:
+        self.open_kill_confirm_pids((process.pid,))
+
+    def open_kill_confirm_pids(self, pids: Iterable[int]) -> None:
+        target_pids = tuple(dict.fromkeys(pids))
         self.mode = MODE_KILL_CONFIRM
         self.kill_confirm_index = 0
-        self.kill_confirm_pid = process.pid
+        self.kill_confirm_pids = target_pids
+        self.kill_confirm_pid = target_pids[0] if len(target_pids) == 1 else None
         self.clear_status_message()
 
     def close_kill_confirm(self) -> None:
         self.mode = MODE_NORMAL
         self.kill_confirm_pid = None
+        self.kill_confirm_pids = ()
         self.clear_status_message()
+
+    def kill_target_pids(self) -> tuple[int, ...]:
+        if self.kill_confirm_pids:
+            return self.kill_confirm_pids
+        if self.kill_confirm_pid is not None:
+            return (self.kill_confirm_pid,)
+        if self.selected_pid is not None:
+            return (self.selected_pid,)
+        return ()
 
     def open_process_info(
         self,
@@ -554,25 +611,33 @@ class ProcessViewState:
 
         option = KILL_CONFIRM_OPTIONS[self.kill_confirm_index]
         kill_signal = KILL_CONFIRM_SIGNALS[option]
-        target_pid = self.kill_confirm_pid
+        target_pids = self.kill_target_pids()
         self.mode = MODE_NORMAL
         self.kill_confirm_pid = None
-        if target_pid is None:
+        self.kill_confirm_pids = ()
+        if not target_pids:
             self.set_status_message("No process selected")
             return KeyResult(changed=True)
-        if not any(proc.pid == target_pid for proc in processes):
-            self.set_status_message(f"PID {target_pid} is no longer running")
-            return KeyResult(changed=True)
-        try:
-            kill_func(target_pid, kill_signal)
-        except ProcessLookupError:
-            self.set_status_message(f"PID {target_pid} is no longer running")
-        except PermissionError:
-            self.set_status_message(f"Permission denied killing PID {target_pid}")
-        except OSError as exc:
-            self.set_status_message(f"Failed to kill PID {target_pid}: {exc}")
-        else:
-            self.set_status_message(f"Sent {kill_signal.name} to PID {target_pid}")
+        running_pids = {proc.pid for proc in processes}
+        sent_pids: list[int] = []
+        stale_pids: list[int] = []
+        error_messages: list[str] = []
+        for target_pid in target_pids:
+            if target_pid not in running_pids:
+                stale_pids.append(target_pid)
+                continue
+            try:
+                kill_func(target_pid, kill_signal)
+            except ProcessLookupError:
+                stale_pids.append(target_pid)
+            except PermissionError:
+                error_messages.append(f"Permission denied killing PID {target_pid}")
+            except OSError as exc:
+                error_messages.append(f"Failed to kill PID {target_pid}: {exc}")
+            else:
+                sent_pids.append(target_pid)
+        self.selected_pids.difference_update(target_pids)
+        self.set_status_message(kill_status_message(kill_signal, target_pids, sent_pids, stale_pids, error_messages))
         return KeyResult(changed=True)
 
     def handle_sort_menu_key(self, key: str) -> KeyResult:
@@ -709,6 +774,8 @@ class ProcessViewState:
         parts = []
         if self.status_message:
             parts.append(self.status_message)
+        if self.selected_pids:
+            parts.append(f"Selected: {len(self.selected_pids)}")
         if self.gpu_filter_index is not None:
             parts.append(f"Focus: GPU {self.gpu_filter_index}")
         if self.filter_query.strip() and self.mode != MODE_FILTER:
@@ -1042,6 +1109,39 @@ def elapsed_seconds(value: str) -> int:
     else:
         return days * 86400
     return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def kill_status_message(
+    kill_signal: signal.Signals,
+    target_pids: tuple[int, ...],
+    sent_pids: list[int],
+    stale_pids: list[int],
+    error_messages: list[str],
+) -> str:
+    if len(target_pids) == 1:
+        pid = target_pids[0]
+        if sent_pids:
+            return f"Sent {kill_signal.name} to PID {pid}"
+        if stale_pids:
+            return f"PID {pid} is no longer running"
+        if error_messages:
+            return error_messages[0]
+        return "No process selected"
+
+    parts = []
+    if sent_pids:
+        parts.append(f"Sent {kill_signal.name} to {len(sent_pids)} {pid_count_label(len(sent_pids))}")
+    if stale_pids:
+        parts.append(f"skipped {len(stale_pids)} no longer running")
+    if error_messages:
+        parts.append(f"{len(error_messages)} failed")
+    if not parts:
+        return "No process selected"
+    return "; ".join(parts)
+
+
+def pid_count_label(count: int) -> str:
+    return "PID" if count == 1 else "PIDs"
 
 
 def current_sort_menu_index(sort_field: str) -> int:

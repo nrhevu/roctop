@@ -16,9 +16,9 @@ The demo is rendered from synthetic data; process names, PIDs, users, and metric
 - **Readable utilization bars:** memory and GPU utilization are shown as inline bars with percentage labels and threshold colors, making idle, busy, and saturated devices easy to scan.
 - **Live history graphs:** split graph panel tracks average host CPU, host memory, GPU utilization, and GPU memory usage over the recent refresh window.
 - **Process visibility:** process table shows GPU index, PID, user, GPU memory, GPU memory percent, host CPU/memory percent, elapsed runtime, and full wrapped command lines.
-- **Interactive process navigation:** move through processes with `j/k` or arrow keys, page through long lists, toggle process tree view, keep the selected process visible across refreshes, and sort by GPU, memory, CPU, PID, user, time, or command.
+- **Interactive process navigation:** move through processes with `j/k` or arrow keys, page through long lists, select multiple process PIDs with Space, toggle process tree view, keep the selected process visible across refreshes, and sort by GPU, memory, CPU, PID, user, time, or command.
 - **Inspect and help popups:** `i` inspects the selected process using the current snapshot and `/proc`, while `?` opens an in-app keybinding reference. Both popups support arrow keys and `h/j/k/l` navigation.
-- **Safe process actions:** `x` opens a high-contrast confirmation menu with Cancel, SIGTERM, and SIGKILL choices, plus status messages for missing processes, permission errors, and other failures.
+- **Safe process actions:** `x` opens a high-contrast confirmation menu for the selected PID or all Space-selected PIDs, with Cancel, SIGTERM, and SIGKILL choices plus status messages for missing processes, permission errors, and other failures.
 - **Robust data collection:** combines `rocm-smi` GPU snapshots, `amd-smi process` process memory data, and `ps` process metadata, with fallbacks when process-specific data is missing or malformed.
 - **Script-friendly modes:** `--once` renders a single terminal snapshot, `--json` prints normalized snapshot data, and `--interval` controls live refresh cadence.
 
@@ -67,7 +67,9 @@ h/Left, l/Right   jump to previous/next sibling in tree view
 n/N               next/previous search match
 f                 filter visible processes
 i                 inspect selected process
-x                 kill selected process with confirmation
+Space             select/deselect process
+x                 kill selected/current process with confirmation
+Esc               clear selected processes or active filter
 ?                 open/close help
 q or Ctrl-C       quit
 ```

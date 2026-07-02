@@ -45,6 +45,15 @@ def first_braille_index(text: str) -> int:
     return -1
 
 
+def process_header_index(plain: str, start: int = 0) -> int:
+    offset = start
+    for line in plain[start:].splitlines(keepends=True):
+        if "│" in line and "GPU" in line and "COMMAND" in line:
+            return offset
+        offset += len(line)
+    raise ValueError("process table header not found")
+
+
 def synthetic_long_processes(count: int) -> list[ProcessInfo]:
     command = (
         "demo_worker --model-path /demo/models/example-checkpoint "
@@ -1081,6 +1090,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<0-1>: focus", plain)
         self.assertIn("x: kill", plain)
         self.assertIn("i: inspect", plain)
+        self.assertNotIn("Space: select", plain)
         self.assertIn("q: quit", plain)
         self.assertLess(plain.index("<0-1>: focus"), plain.index("s: sort"))
         self.assertLess(plain.index("Mon Jun 22"), plain.index("s: sort"))
@@ -1342,7 +1352,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Sort by:", plain)
         self.assertIn("%MEM", plain)
         self.assertNotIn(">%MEM", plain)
-        self.assertLess(plain.index("Sort by:"), plain.index("│ GPU", plain.index("Sort by:")))
+        self.assertLess(plain.index("Sort by:"), process_header_index(plain, plain.index("Sort by:")))
         self.assertIn("38;2;40;42;54", styled)
         self.assertIn("48;2;139;233;253", styled)
 
@@ -1361,9 +1371,51 @@ class RenderTests(unittest.TestCase):
         self.assertIn("SIGKILL", plain)
         self.assertNotIn("y/N", plain)
         self.assertNotIn("Kill cancelled", plain)
-        self.assertLess(plain.index("Kill PID 123:"), plain.index("│ GPU", plain.index("Kill PID 123:")))
+        self.assertLess(plain.index("Kill PID 123:"), process_header_index(plain, plain.index("Kill PID 123:")))
         self.assertIn("38;2;40;42;54", styled)
         self.assertIn("48;2;139;233;253", styled)
+
+    def test_kill_confirm_renders_selected_pid_count(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
+            ProcessInfo(gpu_index=0, pid=456, user="demo", args="python serve.py"),
+        ]
+        state = ProcessViewState(
+            selected_pids={123, 456},
+            kill_confirm_pids=(123, 456),
+            mode=MODE_KILL_CONFIRM,
+            viewport_rows=4,
+        )
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        plain = console.export_text(clear=False)
+        self.assertIn("Kill 2 selected PIDs:", plain)
+
+    def test_process_table_backgrounds_selected_pids(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=0, pid=123, user="demo", args="python train.py"),
+            ProcessInfo(gpu_index=0, pid=456, user="demo", args="python serve.py"),
+        ]
+        state = ProcessViewState(selected_pid=456, selected_pids={123}, viewport_rows=4)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        plain = console.export_text(clear=False)
+        styled = console.export_text(styles=True)
+        train_line = next(line for line in styled.splitlines() if "python train.py" in line)
+        serve_line = next(line for line in styled.splitlines() if "python serve.py" in line)
+        title_line = next(line for line in plain.splitlines() if "Processes  2/2" in line)
+        self.assertIn("48;2;79;152;163", train_line)
+        self.assertNotIn("38;2;139;233;253", train_line)
+        self.assertNotIn("48;2;79;152;163", serve_line)
+        self.assertIn("Selected: 1", title_line)
+
+        state = ProcessViewState(selected_pid=123, selected_pids={123}, viewport_rows=4)
+        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console.print(render_process_table(processes, process_state=state, max_rows=4, terminal_width=140))
+        styled = console.export_text(styles=True)
+        train_line = next(line for line in styled.splitlines() if "python train.py" in line)
+        self.assertIn("48;2;71;121;130", train_line)
+        self.assertNotIn("48;2;79;152;163", train_line)
 
     def test_search_menu_renders_input_above_process_table(self) -> None:
         processes = [
@@ -1382,7 +1434,7 @@ class RenderTests(unittest.TestCase):
         title_line = next(line for line in plain.splitlines() if "Processes  1/1" in line)
         self.assertIn("Search: train", plain)
         self.assertIn("No matches for: serve", title_line)
-        self.assertLess(plain.index("Search: train"), plain.index("│ GPU", plain.index("Search: train")))
+        self.assertLess(plain.index("Search: train"), process_header_index(plain, plain.index("Search: train")))
 
     def test_filter_menu_renders_input_above_process_table(self) -> None:
         processes = [
@@ -1401,7 +1453,7 @@ class RenderTests(unittest.TestCase):
         title_line = next(line for line in plain.splitlines() if "Processes  1/1" in line)
         self.assertIn("Filter: train", plain)
         self.assertNotIn("Filter: train", title_line)
-        self.assertLess(plain.index("Filter: train"), plain.index("│ GPU", plain.index("Filter: train")))
+        self.assertLess(plain.index("Filter: train"), process_header_index(plain, plain.index("Filter: train")))
 
     def test_active_filter_renders_caption_and_filters_rows(self) -> None:
         processes = [
@@ -1623,7 +1675,7 @@ class RenderTests(unittest.TestCase):
         plain = console.export_text(clear=False)
         self.assertLessEqual(len(plain.splitlines()), 45)
         self.assertIn("Sort by:", plain)
-        self.assertLess(plain.index("Sort by:"), plain.index("│ GPU", plain.index("Sort by:")))
+        self.assertLess(plain.index("Sort by:"), process_header_index(plain, plain.index("Sort by:")))
         self.assertIn("3019", plain)
 
     def test_filter_menu_stays_above_process_table_when_cropped(self) -> None:
@@ -1662,7 +1714,7 @@ class RenderTests(unittest.TestCase):
         plain = console.export_text(clear=False)
         self.assertLessEqual(len(plain.splitlines()), 45)
         self.assertIn("Filter: rank", plain)
-        self.assertLess(plain.index("Filter: rank"), plain.index("│ GPU", plain.index("Filter: rank")))
+        self.assertLess(plain.index("Filter: rank"), process_header_index(plain, plain.index("Filter: rank")))
         self.assertIn("1019", plain)
 
     def test_process_view_state_limits_visible_rows(self) -> None:
