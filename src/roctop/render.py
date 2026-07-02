@@ -403,8 +403,11 @@ def append_process_help(
     append_keybinding(details, "/", "search", separator=separator)
     append_keybinding(details, "f", "filter", separator=separator)
     append_keybinding(details, "z", "zoom", separator=separator)
-    graph_label = "avg graph" if process_state is not None and process_state.gpu_graphs_visible else "graphs"
+    graphs_active = process_state is not None and process_state.gpu_graphs_visible
+    graph_label = "avg graph" if graphs_active else "graphs"
     append_keybinding(details, "g", graph_label, separator=separator)
+    if graphs_active:
+        append_keybinding(details, "Esc", "close", separator=separator)
     append_keybinding(details, "i", "inspect", separator=separator)
     append_keybinding(details, "x", "kill", separator=separator)
     append_keybinding(details, "?", "help", separator=separator)
@@ -472,7 +475,7 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
     ]
     if gpu_keys:
         navigation_rows.append((gpu_keys, "focus GPU"))
-    navigation_rows.append(("Esc", "clear selection/filter or cancel active mode"))
+    navigation_rows.append(("Esc", "close graphs, clear selection/filter, or cancel active mode"))
     process_view_rows = [
         ("s", "sort processes"),
         ("t", "toggle process tree"),
@@ -490,6 +493,7 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
     ]
     graph_rows = [
         ("g", "toggle GPU graphs"),
+        ("Esc", "close GPU graphs"),
         (",/.", "pan graph older/newer"),
         ("r", "reset graph to live"),
     ]

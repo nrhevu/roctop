@@ -1181,6 +1181,20 @@ class CliTests(unittest.TestCase):
         cli.handle_key_batch(snapshot, state, ["r"], history=history, graph_frame=graph_frame)
         self.assertEqual(state.graph_view_offset_seconds, 0)
 
+    def test_handle_key_batch_escape_closes_gpu_graph_view(self) -> None:
+        state = cli.ProcessViewState(selected_pid=1, gpu_graphs_visible=True)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 30),
+            gpus=[GpuInfo(index=0)],
+            processes=[ProcessInfo(gpu_index=0, pid=1, args="rank-0")],
+        )
+
+        quit_requested, processes = cli.handle_key_batch(snapshot, state, ["esc"])
+
+        self.assertFalse(quit_requested)
+        self.assertFalse(state.gpu_graphs_visible)
+        self.assertEqual([proc.pid for proc in processes], [1])
+
     def test_handle_key_batch_pans_focused_gpu_graph_view(self) -> None:
         state = cli.ProcessViewState(selected_pid=1, gpu_filter_index=0)
         snapshot = Snapshot(

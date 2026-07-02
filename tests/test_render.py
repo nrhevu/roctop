@@ -1107,6 +1107,23 @@ class RenderTests(unittest.TestCase):
         wide_plain = wide_console.export_text(clear=False)
         self.assertIn("<0-1>: focus  s: sort", wide_plain)
 
+    def test_process_help_shows_escape_close_when_gpu_graphs_visible(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0), GpuInfo(index=1)],
+            processes=[ProcessInfo(gpu_index=0, pid=123, args="python train.py")],
+        )
+        state = ProcessViewState(gpu_graphs_visible=True, viewport_rows=4)
+        console = Console(width=180, color_system="truecolor", record=True, file=StringIO())
+
+        console.print(render_snapshot(snapshot, process_state=state, terminal_height=40, terminal_width=180))
+        plain = console.export_text(clear=False)
+
+        self.assertIn("g: avg graph", plain)
+        self.assertIn("Esc: close", plain)
+        self.assertLess(plain.index("g: avg graph"), plain.index("Esc: close"))
+        self.assertLess(plain.index("Esc: close"), plain.index("i: inspect"))
+
     def test_help_popup_overlays_process_table_without_reserving_rows(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
@@ -1141,6 +1158,7 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<0-3>: focus GPU", plain)
         self.assertIn("z: zoom process table", plain)
         self.assertIn("g: toggle GPU graphs", plain)
+        self.assertIn("Esc: close GPU graphs", plain)
         self.assertIn(",/.: pan graph older/newer", plain)
         self.assertIn("r: reset graph to live", plain)
         self.assertIn("j/k, Up/Down: scroll popup one row", plain)

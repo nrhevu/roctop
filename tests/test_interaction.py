@@ -176,6 +176,51 @@ class InteractionTests(unittest.TestCase):
         state.handle_key("g", processes)
         self.assertFalse(state.gpu_graphs_visible)
 
+    def test_escape_closes_gpu_graph_view_in_normal_mode(self) -> None:
+        state = ProcessViewState(gpu_graphs_visible=True)
+        processes = [proc(100)]
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertFalse(state.gpu_graphs_visible)
+
+    def test_escape_closes_gpu_graph_view_before_clearing_hidden_filter(self) -> None:
+        state = ProcessViewState(
+            gpu_graphs_visible=True,
+            filter_query="train",
+            filter_input="train",
+        )
+        processes = [proc(100, args="train")]
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertFalse(state.gpu_graphs_visible)
+        self.assertEqual(state.filter_query, "train")
+        self.assertEqual(state.filter_input, "train")
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.filter_query, "")
+        self.assertEqual(state.filter_input, "")
+
+    def test_escape_closes_gpu_graph_view_before_clearing_hidden_selection(self) -> None:
+        state = ProcessViewState(gpu_graphs_visible=True, selected_pids={100})
+        processes = [proc(100)]
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertFalse(state.gpu_graphs_visible)
+        self.assertEqual(state.selected_pids, {100})
+
+        result = state.handle_key("esc", processes)
+
+        self.assertTrue(result.changed)
+        self.assertEqual(state.selected_pids, set())
+
     def test_cursor_tracks_selected_pid_after_sort_refresh(self) -> None:
         processes = [
             proc(1, cpu_percent=1.0),

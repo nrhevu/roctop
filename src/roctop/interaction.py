@@ -111,7 +111,7 @@ HELP_ENTRIES = (
     ("g", "Toggle GPU graphs", "normal"),
     (",/.", "Pan graph older/newer", "normal"),
     ("r", "Reset graph to live", "normal"),
-    ("Esc", "Clear selection/filter or cancel active mode", "normal, menus"),
+    ("Esc", "Close graphs, clear selection/filter, or cancel active mode", "normal, menus"),
     ("t", "Toggle process tree", "normal"),
     ("p", "Jump to parent process", "tree"),
     ("h / Left", "Jump to previous sibling", "tree"),
@@ -317,6 +317,11 @@ class ProcessViewState:
                     self.sync(self.display_processes(source_processes))
                 return KeyResult(changed=True)
             return KeyResult()
+
+        if key == KEY_ESC and self.gpu_graphs_visible:
+            self.gpu_graphs_visible = False
+            self.clear_status_message()
+            return KeyResult(changed=True)
 
         if key == KEY_ESC and self.selected_pids:
             self.clear_selected_processes()

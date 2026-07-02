@@ -254,6 +254,21 @@ def poll_live_until_quit(
             snapshot = update.snapshot
             latest_sequence = update.sequence
 
+        pending_key_timeout = KEY_POLL_SECONDS if getattr(keyboard, "pending_input", "") else 0.0
+        if handle_live_keyboard_input(
+            live,
+            keyboard,
+            snapshot,
+            history,
+            process_state,
+            console,
+            interval,
+            display_time,
+            graph_frame,
+            timeout=pending_key_timeout,
+        ):
+            return
+
         now = time.monotonic()
         current_size = console_dimensions(console)
         status_expired = process_state.expire_status_message(now)
@@ -284,34 +299,59 @@ def poll_live_until_quit(
 
         next_wakeup_at = min(next_render_at, next_graph_at)
         timeout = min(KEY_POLL_SECONDS, max(0.0, next_wakeup_at - time.monotonic()))
-        keys = keyboard.read_keys(timeout=timeout)
-        if not keys:
-            continue
-
-        quit_requested, processes = handle_key_batch(
+        if handle_live_keyboard_input(
+            live,
+            keyboard,
             snapshot,
+            history,
             process_state,
-            keys,
-            history=history,
-            graph_frame=graph_frame,
-            terminal_width=console_dimensions(console)[1],
-        )
-        rendered_size = console_dimensions(console)
-        live.update(
-            render_live_snapshot(
-                snapshot,
-                history,
-                process_state,
-                console,
-                display_processes=processes,
-                interval=interval,
-                display_time=display_time,
-                graph_frame=graph_frame,
-            ),
-            refresh=True,
-        )
-        if quit_requested:
+            console,
+            interval,
+            display_time,
+            graph_frame,
+            timeout=timeout,
+        ):
             return
+
+
+def handle_live_keyboard_input(
+    live: Live,
+    keyboard: TerminalKeyboard,
+    snapshot: Snapshot,
+    history: MetricsHistory,
+    process_state: ProcessViewState,
+    console: Console,
+    interval: float,
+    display_time: datetime,
+    graph_frame: GraphFrame,
+    timeout: float,
+) -> bool:
+    keys = keyboard.read_keys(timeout=timeout)
+    if not keys:
+        return False
+
+    quit_requested, processes = handle_key_batch(
+        snapshot,
+        process_state,
+        keys,
+        history=history,
+        graph_frame=graph_frame,
+        terminal_width=console_dimensions(console)[1],
+    )
+    live.update(
+        render_live_snapshot(
+            snapshot,
+            history,
+            process_state,
+            console,
+            display_processes=processes,
+            interval=interval,
+            display_time=display_time,
+            graph_frame=graph_frame,
+        ),
+        refresh=True,
+    )
+    return quit_requested
 
 
 def poll_input_until_refresh(
