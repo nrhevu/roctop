@@ -21,4 +21,7 @@ def profile_span(name: str) -> Iterator[None]:
         yield
     finally:
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        print(f"roctop profile {name}: {elapsed_ms:.2f}ms", file=sys.stderr)
+        try:
+            print(f"roctop profile {name}: {elapsed_ms:.2f}ms", file=sys.stderr)
+        except OSError:
+            pass

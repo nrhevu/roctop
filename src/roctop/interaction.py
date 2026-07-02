@@ -823,18 +823,35 @@ class TerminalKeyboard:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.enabled and self.fd is not None and self.original_attrs is not None:
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.original_attrs)
+            try:
+                termios.tcsetattr(self.fd, termios.TCSANOW, self.original_attrs)
+            except (OSError, termios.error):
+                pass
+        self.enabled = False
+        self.fd = None
 
     def read_keys(self, timeout: float = 0.0) -> list[str]:
         if not self.enabled or self.fd is None:
             return []
-        readable, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
+        try:
+            readable, _, _ = select.select([self.fd], [], [], max(0.0, timeout))
+        except (OSError, ValueError):
+            self.enabled = False
+            return []
         if not readable:
             if self.pending_input:
                 keys, self.pending_input = parse_key_input(self.pending_input, flush_incomplete=True)
                 return keys
             return []
-        data = os.read(self.fd, 64)
+        try:
+            data = os.read(self.fd, 64)
+        except OSError:
+            self.enabled = False
+            return []
+        if not data:
+            self.enabled = False
+            self.pending_input = ""
+            return []
         keys, self.pending_input = parse_key_input(self.pending_input + data.decode(errors="ignore"))
         return keys
 

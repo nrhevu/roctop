@@ -12,7 +12,7 @@ from unittest.mock import patch
 from rich.console import Console
 
 from roctop import cli
-from roctop.collectors import CommandInterrupted, CommandTimeout
+from roctop.collectors import CollectionError, CommandInterrupted, CommandTimeout
 from roctop.interaction import KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP, MODE_HELP, MODE_NORMAL, MODE_PROCESS_INFO
 from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 
@@ -1536,6 +1536,86 @@ class CliTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(history.added_snapshots), 3)
         self.assertGreaterEqual(len(history.samples), 3)
+
+    def test_background_collector_recovers_after_transient_errors(self) -> None:
+        recovered = threading.Event()
+        calls = 0
+
+        def fake_collect_snapshot() -> Snapshot:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise CollectionError("rocm-smi returned invalid JSON")
+            if calls == 2:
+                raise RuntimeError("unexpected collector failure")
+            recovered.set()
+            return Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, calls))
+
+        collector = cli.BackgroundSnapshotCollector(interval=0.01, collect_func=fake_collect_snapshot)
+        collector.start()
+        try:
+            self.assertTrue(recovered.wait(timeout=1.0))
+            latest = collector.latest_after(0)
+        finally:
+            collector.stop()
+
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.snapshot.timestamp, datetime(2026, 6, 22, 12, 0, 3))
+
+    def test_poll_live_until_quit_returns_when_live_refresh_breaks(self) -> None:
+        class FakeConsole:
+            @property
+            def size(self) -> FakeConsoleSize:
+                return FakeConsoleSize(height=24, width=100)
+
+        class FakeCollector:
+            def raise_if_failed(self) -> None:
+                return None
+
+            def latest_after(self, sequence: int):
+                return None
+
+        class FakeClock:
+            def __init__(self) -> None:
+                self.current = 0.0
+
+            def monotonic(self) -> float:
+                return self.current
+
+            def advance(self, seconds: float) -> None:
+                self.current += seconds
+
+        class BrokenLive:
+            def update(self, renderable, refresh: bool = False) -> None:
+                raise BrokenPipeError("terminal closed")
+
+        class FakeKeyboard:
+            def __init__(self, clock: FakeClock) -> None:
+                self.clock = clock
+
+            def read_keys(self, timeout: float):
+                self.clock.advance(timeout)
+                return []
+
+        clock = FakeClock()
+        original_monotonic = cli.time.monotonic
+
+        try:
+            cli.time.monotonic = clock.monotonic
+            cli.poll_live_until_quit(
+                BrokenLive(),
+                FakeKeyboard(clock),
+                Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)),
+                cli.MetricsHistory(max_samples=120),
+                cli.ProcessViewState(),
+                FakeConsole(),
+                FakeCollector(),
+                interval=0.1,
+            )
+        finally:
+            cli.time.monotonic = original_monotonic
+
+        self.assertGreaterEqual(clock.current, 0.1)
 
     def test_run_live_responds_under_200ms_while_background_collection_is_blocked(self) -> None:
         background_collect_started = threading.Event()

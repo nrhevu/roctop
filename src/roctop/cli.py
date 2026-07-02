@@ -120,14 +120,17 @@ class BackgroundSnapshotCollector:
                 snapshot = self.collect_func()
             except CommandTimeout:
                 pass
-            except CollectionError as exc:
-                with self._lock:
-                    self._error = exc
-                return
+            except CollectionError:
+                pass
+            except Exception:
+                pass
 
             if snapshot is not None:
                 if self.history is not None:
-                    self.history.add_snapshot(snapshot)
+                    try:
+                        self.history.add_snapshot(snapshot)
+                    except Exception:
+                        pass
                 with self._lock:
                     self._sequence += 1
                     self._latest = SnapshotUpdate(sequence=self._sequence, snapshot=snapshot)
@@ -279,7 +282,8 @@ def poll_live_until_quit(
         if graph_due:
             graph_frame = advance_graph_frame(history, graph_frame, display_time)
         if current_size != rendered_size or status_expired or refresh_due or graph_due:
-            live.update(
+            if not refresh_live(
+                live,
                 render_live_snapshot(
                     snapshot,
                     history,
@@ -289,8 +293,8 @@ def poll_live_until_quit(
                     display_time=display_time,
                     graph_frame=graph_frame,
                 ),
-                refresh=True,
-            )
+            ):
+                return
             rendered_size = current_size
             if refresh_due:
                 next_render_at = now + render_interval
@@ -338,7 +342,8 @@ def handle_live_keyboard_input(
         graph_frame=graph_frame,
         terminal_width=console_dimensions(console)[1],
     )
-    live.update(
+    if not refresh_live(
+        live,
         render_live_snapshot(
             snapshot,
             history,
@@ -349,8 +354,8 @@ def handle_live_keyboard_input(
             display_time=display_time,
             graph_frame=graph_frame,
         ),
-        refresh=True,
-    )
+    ):
+        return True
     return quit_requested
 
 
@@ -373,22 +378,32 @@ def poll_input_until_refresh(
         current_size = console_dimensions(console)
         status_expired = process_state.expire_status_message(now)
         if current_size != rendered_size or status_expired:
-            live.update(
+            if not refresh_live(
+                live,
                 render_snapshot(snapshot, history, process_state, *current_size),
-                refresh=True,
-            )
+            ):
+                return True
             rendered_size = current_size
         keys = keyboard.read_keys(timeout=min(KEY_POLL_SECONDS, remaining))
         if not keys:
             continue
         quit_requested, processes = handle_key_batch(snapshot, process_state, keys, terminal_width=rendered_size[1])
         rendered_size = console_dimensions(console)
-        live.update(
+        if not refresh_live(
+            live,
             render_snapshot(snapshot, history, process_state, *rendered_size, display_processes=processes),
-            refresh=True,
-        )
+        ):
+            return True
         if quit_requested:
             return True
+
+
+def refresh_live(live: Live, renderable) -> bool:
+    try:
+        live.update(renderable, refresh=True)
+    except (BrokenPipeError, OSError):
+        return False
+    return True
 
 
 def handle_key_batch(

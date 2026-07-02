@@ -177,6 +177,8 @@ def run_command(args: list[str], timeout: float = 5.0) -> CommandResult:
         raise CollectionError(f"Command not found: {args[0]}") from exc
     except subprocess.TimeoutExpired as exc:
         raise CommandTimeout(f"Command timed out: {' '.join(shlex.quote(a) for a in args)}") from exc
+    except OSError as exc:
+        raise CollectionError(f"Command failed: {args[0]}: {exc}") from exc
 
     return CommandResult(
         args=args,
@@ -202,7 +204,12 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
     if rocm_result.returncode != 0 and not rocm_result.stdout.strip():
         raise CollectionError(_command_failure_message(rocm_result))
 
-    rocm_data = load_json_from_text(rocm_result.stdout)
+    try:
+        rocm_data = load_json_from_text(rocm_result.stdout)
+    except json.JSONDecodeError as exc:
+        raise CollectionError(f"rocm-smi returned invalid JSON: {exc}") from exc
+    if not isinstance(rocm_data, dict):
+        raise CollectionError("rocm-smi returned invalid JSON root")
     gpus, rocm_processes, driver_version = parse_rocm_smi_json(rocm_data)
     amd_smi_driver_version = merge_amd_smi_gpu_detail_commands(gpus, amd_gpu_detail_commands, warnings)
     if not driver_version:
@@ -950,6 +957,7 @@ def read_ps_rows_cached(pids: list[int]) -> dict[int, dict[str, str]]:
         return {}
 
     now = time.monotonic()
+    prune_ps_row_cache(now)
     rows: dict[int, dict[str, str]] = {}
     missing_pids: list[int] = []
     for pid in pids:
@@ -975,6 +983,7 @@ def read_ps_rows_fresh(pids: list[int]) -> dict[int, dict[str, str]]:
 
     fresh_rows = read_ps_rows(pids)
     now = time.monotonic()
+    prune_ps_row_cache(now)
     for pid, row in fresh_rows.items():
         _ps_row_cache[pid] = (now, row)
 
@@ -986,6 +995,16 @@ def read_ps_rows_fresh(pids: list[int]) -> dict[int, dict[str, str]]:
         if cached is not None:
             rows[pid] = cached[1]
     return rows
+
+
+def prune_ps_row_cache(now: float) -> None:
+    expired_pids = [
+        pid
+        for pid, (cached_at, _row) in _ps_row_cache.items()
+        if now - cached_at >= PS_CACHE_TTL_SECONDS
+    ]
+    for pid in expired_pids:
+        _ps_row_cache.pop(pid, None)
 
 
 def read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:

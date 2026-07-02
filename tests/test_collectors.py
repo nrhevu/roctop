@@ -11,10 +11,12 @@ from roctop.collectors import (
     CommandInterrupted,
     CommandResult,
     CommandTimeout,
+    CollectionError,
     collect_process_ancestors,
     collect_snapshot,
     load_json_from_text,
     merge_process_sources,
+    parse_memory_bytes_field,
     parse_amd_pci_models,
     parse_amd_smi_gpu_json,
     parse_amd_smi_process_json,
@@ -23,7 +25,7 @@ from roctop.collectors import (
     run_command,
 )
 from roctop.formatting import format_bytes_mib
-from roctop.models import ProcessInfo
+from roctop.models import GpuInfo, ProcessInfo
 
 
 class CollectorTests(unittest.TestCase):
@@ -43,6 +45,31 @@ class CollectorTests(unittest.TestCase):
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["rocm-smi"], 1)):
             with self.assertRaises(CommandTimeout):
                 run_command(["rocm-smi"], timeout=1)
+
+    def test_run_command_wraps_os_error(self) -> None:
+        with patch("subprocess.run", side_effect=PermissionError("permission denied")):
+            with self.assertRaises(CollectionError):
+                run_command(["rocm-smi"], timeout=1)
+
+    def test_collect_snapshot_wraps_invalid_rocm_json(self) -> None:
+        def fake_run_command(args, **kwargs) -> CommandResult:
+            if args[0] == "rocm-smi":
+                return CommandResult(args=args, returncode=0, stdout="not json", stderr="")
+            return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            with self.assertRaises(CollectionError):
+                collect_snapshot()
+
+    def test_collect_snapshot_rejects_non_object_rocm_json(self) -> None:
+        def fake_run_command(args, **kwargs) -> CommandResult:
+            if args[0] == "rocm-smi":
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+            return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            with self.assertRaises(CollectionError):
+                collect_snapshot()
 
     def test_collect_snapshot_raises_command_interrupted(self) -> None:
         original_run_command = collectors.run_command
@@ -192,6 +219,21 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(first[42]["user"], "demo1")
         self.assertEqual(second[42]["user"], "demo1")
         self.assertEqual(third[42]["user"], "demo2")
+
+    def test_fresh_ps_read_prunes_expired_cache_rows(self) -> None:
+        collectors._ps_row_cache[1] = (100.0, {"user": "old"})
+
+        def fake_read_ps_rows(pids: list[int]) -> dict[int, dict[str, str]]:
+            return {2: {"user": "new"}}
+
+        with (
+            patch("roctop.collectors.read_ps_rows", side_effect=fake_read_ps_rows),
+            patch("roctop.collectors.time.monotonic", return_value=100.0 + collectors.PS_CACHE_TTL_SECONDS),
+        ):
+            rows = collectors.read_ps_rows_fresh([2])
+
+        self.assertEqual(rows[2]["user"], "new")
+        self.assertNotIn(1, collectors._ps_row_cache)
 
     def test_process_enrichment_reads_fresh_ps_rows_without_cache_delay(self) -> None:
         calls: list[list[int]] = []
@@ -713,6 +755,24 @@ class CollectorTests(unittest.TestCase):
 
         self.assertEqual(processes[0].gpu_memory_bytes, 1024 * 1024 * 1024)
         self.assertEqual(processes[0].gpu_memory_percent, 50.0)
+
+    def test_parse_memory_bytes_field_rejects_non_finite_values(self) -> None:
+        self.assertEqual(parse_memory_bytes_field({"value": "NaN", "unit": "B"}), 0)
+        self.assertEqual(parse_memory_bytes_field({"value": "Infinity", "unit": "B"}), 0)
+
+    def test_parse_amd_smi_process_json_skips_non_finite_memory(self) -> None:
+        raw = [
+            {
+                "gpu": 0,
+                "process_list": [
+                    {"process_info": {"pid": 42, "name": "worker", "mem_usage": {"value": "Infinity"}}},
+                ],
+            }
+        ]
+
+        processes = parse_amd_smi_process_json(raw, [GpuInfo(index=0, memory_total_bytes=1024)])
+
+        self.assertEqual(processes, [])
 
     def test_parse_amd_smi_process_json_skips_non_object_entries(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(

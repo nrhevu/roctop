@@ -79,6 +79,43 @@ class InteractionTests(unittest.TestCase):
             self.assertEqual(keyboard.read_keys(), [])
             self.assertEqual(keyboard.read_keys(), ["esc"])
 
+    def test_terminal_keyboard_disables_on_select_error(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+
+        with patch("roctop.interaction.select.select", side_effect=OSError("bad fd")):
+            self.assertEqual(keyboard.read_keys(), [])
+
+        self.assertFalse(keyboard.enabled)
+
+    def test_terminal_keyboard_disables_on_read_eof(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+        keyboard.pending_input = "\x1b"
+
+        with (
+            patch("roctop.interaction.select.select", return_value=([1], [], [])),
+            patch("roctop.interaction.os.read", return_value=b""),
+        ):
+            self.assertEqual(keyboard.read_keys(), [])
+
+        self.assertFalse(keyboard.enabled)
+        self.assertEqual(keyboard.pending_input, "")
+
+    def test_terminal_keyboard_exit_swallows_restore_errors(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+        keyboard.original_attrs = object()
+
+        with patch("roctop.interaction.termios.tcsetattr", side_effect=OSError("tty gone")):
+            keyboard.__exit__(None, None, None)
+
+        self.assertFalse(keyboard.enabled)
+        self.assertIsNone(keyboard.fd)
+
     def test_cursor_movement_and_page_keys_clamp(self) -> None:
         processes = [proc(pid) for pid in range(100, 106)]
         state = ProcessViewState(viewport_rows=3)
