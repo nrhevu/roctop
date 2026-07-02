@@ -1156,17 +1156,37 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("MODE", plain)
         self.assertIn("<0-3>", plain)
         self.assertIn("<0-3>: focus GPU", plain)
+        self.assertIn("Esc: close graphs/menus", plain)
+        self.assertNotIn("close graphs, clear selection/filter, or cancel active mode", plain)
         self.assertIn("z: zoom process table", plain)
         self.assertIn("g: toggle GPU graphs", plain)
         self.assertIn("Esc: close GPU graphs", plain)
-        self.assertIn(",/.: pan graph older/newer", plain)
-        self.assertIn("r: reset graph to live", plain)
+        self.assertIn(",/.: pan older/newer", plain)
+        self.assertIn("r: reset to live", plain)
         self.assertIn("j/k, Up/Down: scroll popup one row", plain)
         self.assertIn("h/l, Left/Right: page popup up/down", plain)
         self.assertIn("Press Esc or ? to return.", plain)
+        esc_lines = [line for line in plain.splitlines() if "Esc: close graphs/menus" in line]
+        self.assertEqual(len(esc_lines), 1)
+        self.assertNotIn("inspect selected process", esc_lines[0])
         self.assertIn("38;2;80;250;123", styled)
         self.assertIn("38;2;241;250;140", styled)
         self.assertIn("38;2;255;85;85", styled)
+
+    def test_help_key_lines_wrap_long_actions(self) -> None:
+        lines = render.help_key_lines(
+            "Esc",
+            "close graphs, clear selection/filter, or cancel active mode",
+            key_width=8,
+            max_width=34,
+        )
+
+        plain_lines = [line.plain for line in lines]
+        self.assertGreater(len(plain_lines), 1)
+        self.assertTrue(all(len(line) <= 34 for line in plain_lines))
+        self.assertTrue(plain_lines[0].lstrip().startswith("Esc:"))
+        self.assertTrue(plain_lines[1].startswith(" " * 10))
+        self.assertNotIn(":", plain_lines[1])
 
     def test_help_overlay_only_replaces_popup_rectangle(self) -> None:
         base_line = "L" + "." * 118 + "R"

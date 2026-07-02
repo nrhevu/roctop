@@ -111,7 +111,7 @@ HELP_ENTRIES = (
     ("g", "Toggle GPU graphs", "normal"),
     (",/.", "Pan graph older/newer", "normal"),
     ("r", "Reset graph to live", "normal"),
-    ("Esc", "Close graphs, clear selection/filter, or cancel active mode", "normal, menus"),
+    ("Esc", "Close graphs/menus or clear filters", "normal, menus"),
     ("t", "Toggle process tree", "normal"),
     ("p", "Jump to parent process", "tree"),
     ("h / Left", "Jump to previous sibling", "tree"),

@@ -62,6 +62,7 @@ FOCUSED_GPU_METRICS_COLUMN_GAP = "        "
 HELP_ONE_COLUMN_KEY_WIDTH = 22
 HELP_TWO_COLUMN_KEY_WIDTH = 16
 HELP_LEFT_COLUMN_WIDTH = 58
+HELP_TWO_COLUMN_CELL_WIDTH = 58
 HELP_TWO_COLUMN_MIN_WIDTH = 110
 PROCESS_TABLE_CHROME_ROWS = 5
 PROCESS_TABLE_COLUMN_COUNT = 9
@@ -475,15 +476,15 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
     ]
     if gpu_keys:
         navigation_rows.append((gpu_keys, "focus GPU"))
-    navigation_rows.append(("Esc", "close graphs, clear selection/filter, or cancel active mode"))
+    navigation_rows.append(("Esc", "close graphs/menus"))
     process_view_rows = [
         ("s", "sort processes"),
-        ("t", "toggle process tree"),
+        ("t", "process tree"),
         ("z", "zoom process table"),
         ("i", "inspect selected process"),
         ("Space", "select process"),
         ("x", "kill selected/current process"),
-        ("q", "quit or cancel menu"),
+        ("q", "quit"),
     ]
     search_rows = [
         ("/", "search processes"),
@@ -494,8 +495,8 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
     graph_rows = [
         ("g", "toggle GPU graphs"),
         ("Esc", "close GPU graphs"),
-        (",/.", "pan graph older/newer"),
-        ("r", "reset graph to live"),
+        (",/.", "pan older/newer"),
+        ("r", "reset to live"),
     ]
     tree_rows = [
         ("p", "jump to parent process"),
@@ -507,33 +508,33 @@ def help_popup_body(gpus: Sequence[GpuInfo] | None = None, panel_width: int = 12
         ("Enter", "apply selected sort or kill option"),
         ("j/k, Up/Down", "scroll popup one row"),
         ("h/l, Left/Right", "page popup up/down"),
-        ("y", "send SIGTERM in kill confirmation"),
+        ("y", "send SIGTERM"),
         ("Ctrl-C", "quit"),
     ]
 
     if panel_width < HELP_TWO_COLUMN_MIN_WIDTH:
         append_help_section(help_text, "Navigation")
-        append_help_key_rows(help_text, navigation_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        append_help_key_rows(help_text, navigation_rows, HELP_ONE_COLUMN_KEY_WIDTH, panel_width - 4)
         help_text.append("\n")
 
         append_help_section(help_text, "Process view")
-        append_help_key_rows(help_text, process_view_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        append_help_key_rows(help_text, process_view_rows, HELP_ONE_COLUMN_KEY_WIDTH, panel_width - 4)
         help_text.append("\n")
 
         append_help_section(help_text, "Search and filters")
-        append_help_key_rows(help_text, search_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        append_help_key_rows(help_text, search_rows, HELP_ONE_COLUMN_KEY_WIDTH, panel_width - 4)
         help_text.append("\n")
 
         append_help_section(help_text, "Graphs")
-        append_help_key_rows(help_text, graph_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        append_help_key_rows(help_text, graph_rows, HELP_ONE_COLUMN_KEY_WIDTH, panel_width - 4)
         help_text.append("\n")
 
         append_help_section(help_text, "Tree mode")
-        append_help_key_rows(help_text, tree_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        append_help_key_rows(help_text, tree_rows, HELP_ONE_COLUMN_KEY_WIDTH, panel_width - 4)
         help_text.append("\n")
 
         append_help_section(help_text, "Menus and popups")
-        append_help_key_rows(help_text, menu_rows, HELP_ONE_COLUMN_KEY_WIDTH)
+        append_help_key_rows(help_text, menu_rows, HELP_ONE_COLUMN_KEY_WIDTH, panel_width - 4)
         help_text.append("\n")
         help_text.append("Press Esc or ? to return.", style=f"bold {DRACULA_CYAN}")
         return help_text
@@ -580,10 +581,11 @@ def append_color_help_row(help_text: Text, name: str, color: str, description: s
     help_text.append("\n")
 
 
-def append_help_key_rows(help_text: Text, rows: Sequence[tuple[str, str]], key_width: int) -> None:
+def append_help_key_rows(help_text: Text, rows: Sequence[tuple[str, str]], key_width: int, max_width: int) -> None:
     for key, action in rows:
-        help_text.append_text(help_key_cell(key, action, key_width))
-        help_text.append("\n")
+        for line in help_key_lines(key, action, key_width, max_width):
+            help_text.append_text(line)
+            help_text.append("\n")
 
 
 def append_help_section_pair(
@@ -607,12 +609,27 @@ def append_help_section_pair(
 
 def help_section_lines(title: str, rows: Sequence[tuple[str, str]]) -> list[Text]:
     lines = [Text(f"{title}:", style=f"bold {DRACULA_FG}")]
-    lines.extend(help_key_cell(key, action, HELP_TWO_COLUMN_KEY_WIDTH) for key, action in rows)
+    for key, action in rows:
+        lines.extend(help_key_lines(key, action, HELP_TWO_COLUMN_KEY_WIDTH, HELP_TWO_COLUMN_CELL_WIDTH))
     return lines
+
+
+def help_key_lines(key: str, action: str, key_width: int, max_width: int) -> list[Text]:
+    action_width = max(1, max_width - key_width - 2)
+    wrapped_actions = textwrap.wrap(action, width=action_width) or [""]
+    return [
+        help_key_cell(key if index == 0 else "", wrapped_action, key_width)
+        for index, wrapped_action in enumerate(wrapped_actions)
+    ]
 
 
 def help_key_cell(key: str, action: str, key_width: int) -> Text:
     cell = Text(no_wrap=True, overflow="crop")
+    if not key:
+        cell.append(" " * (key_width + 2))
+        cell.append(action, style=DRACULA_FG)
+        return cell
+
     cell.append(" " * max(0, key_width - len(key)))
     cell.append(key, style=f"bold {DRACULA_CYAN}")
     cell.append(": ", style=DRACULA_FG)
