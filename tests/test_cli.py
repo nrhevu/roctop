@@ -433,6 +433,37 @@ class CliTests(unittest.TestCase):
         self.assertEqual(waiting.display_time, previous.display_time)
         self.assertEqual(advanced.display_time, datetime(2026, 6, 22, 12, 0, 1))
 
+    def test_advance_graph_frame_catches_up_after_render_gap(self) -> None:
+        history = cli.MetricsHistory(max_samples=cli.GRAPH_HISTORY_BUCKETS)
+        start = datetime(2026, 6, 22, 12, 0, 0)
+        for second in range(cli.GRAPH_HISTORY_BUCKETS):
+            history.append_sample(
+                cli.MetricSample(
+                    timestamp=start + timedelta(seconds=second),
+                    avg_cpu_percent=None,
+                    avg_mem_percent=None,
+                    avg_gpu_percent=None,
+                    avg_gpu_mem_percent=None,
+                    gpu_metrics=(cli.GpuMetricSample(index=0, utilization_percent=0.0, memory_percent=32.0),),
+                )
+            )
+        previous = cli.GraphFrame(
+            display_time=start,
+            history_samples=history.samples[:1],
+        )
+
+        advanced = cli.advance_graph_frame(
+            history,
+            previous,
+            now=start + timedelta(seconds=cli.GRAPH_HISTORY_SECONDS + 1),
+        )
+
+        self.assertEqual(advanced.display_time, start + timedelta(seconds=cli.GRAPH_HISTORY_SECONDS))
+        self.assertEqual(len(advanced.history_samples), cli.GRAPH_HISTORY_BUCKETS)
+        self.assertEqual(advanced.history_samples[0].timestamp, start)
+        self.assertEqual(advanced.history_samples[-1].timestamp, start + timedelta(seconds=cli.GRAPH_HISTORY_SECONDS))
+        self.assertEqual(advanced.history_samples[0].gpu_metrics[0].memory_percent, 32.0)
+
     def test_advance_graph_frame_does_not_recompute_rendered_buckets(self) -> None:
         history = cli.MetricsHistory(max_samples=120)
         history.append_sample(
