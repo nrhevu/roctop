@@ -814,15 +814,15 @@ def render_gpu_table(
 
     table = Table(box=box.SQUARE, expand=True, show_lines=False, padding=(0, 1))
     table.add_column("GPU", justify="right", style="bold")
-    table.add_column("GUID", overflow="fold")
+    table.add_column("GUID", justify="right", overflow="fold")
     table.add_column("Temp", justify="right")
     table.add_column("Fan", justify="right")
     table.add_column("Power", justify="right")
     table.add_column("SCLK", justify="right")
     table.add_column("MCLK", justify="right")
     table.add_column("Memory-Usage", justify="right")
-    table.add_column("%Memory-Usage", ratio=2)
-    table.add_column("%Utilization", ratio=2)
+    table.add_column("%Memory-Usage", justify="right", ratio=2)
+    table.add_column("%Utilization", justify="right", ratio=2)
 
     for gpu in gpus:
         mem_style = percent_style(gpu.memory_percent)

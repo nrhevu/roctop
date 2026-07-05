@@ -66,6 +66,21 @@ def synthetic_long_processes(count: int) -> list[ProcessInfo]:
 
 
 class RenderTests(unittest.TestCase):
+    def test_gpu_table_columns_align_right(self) -> None:
+        table = render.render_gpu_table(
+            [
+                GpuInfo(
+                    index=0,
+                    guid="29921",
+                    memory_used_bytes=1024 * 1024,
+                    memory_total_bytes=1024 * 1024 * 1024,
+                    utilization_percent=42,
+                )
+            ]
+        )
+
+        self.assertTrue(all(column.justify == "right" for column in table.columns))
+
     def test_snapshot_renders_at_narrow_width(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
