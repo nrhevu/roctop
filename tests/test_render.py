@@ -1158,7 +1158,7 @@ class RenderTests(unittest.TestCase):
             estimate_process_view_rows(snapshot, None, 45, normal_state),
             estimate_process_view_rows(snapshot, None, 45, state),
         )
-        self.assertIn("roctop 0.4.1 - AMD GPU/process monitor for ROCm", plain)
+        self.assertIn("roctop 0.4.2 - AMD GPU/process monitor for ROCm", plain)
         self.assertIn("Colors:", plain)
         self.assertIn("green  : good headroom, low pressure", plain)
         self.assertIn("yellow : high usage, worth watching", plain)
@@ -1211,7 +1211,7 @@ class RenderTests(unittest.TestCase):
         console.print(render.HelpOverlay(base, state, terminal_height=25, terminal_width=120))
         lines = console.export_text(clear=False).splitlines()
 
-        help_row = next(line for line in lines if "roctop 0.4.1" in line)
+        help_row = next(line for line in lines if "roctop 0.4.2" in line)
         self.assertTrue(help_row.startswith("L"))
         self.assertTrue(help_row.rstrip().endswith("R"))
         self.assertIn("AMD GPU/process monitor", help_row)
