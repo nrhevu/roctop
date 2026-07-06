@@ -710,17 +710,8 @@ def advance_graph_frame(
     if next_second > closed_second:
         return previous_frame
     raw_samples = history.samples
-    latest_sample_second = latest_graph_sample_second(raw_samples)
-    if latest_sample_second is None:
+    if not graph_bucket_can_close(raw_samples, next_second):
         return previous_frame
-    target_second = min(closed_second, latest_sample_second)
-    if target_second < next_second:
-        return previous_frame
-    if target_second > next_second:
-        return GraphFrame(
-            display_time=target_second,
-            history_samples=graph_samples_until(raw_samples, target_second, GRAPH_HISTORY_BUCKETS),
-        )
     previous_values = graph_sample_values(previous_frame.history_samples[-1]) if previous_frame.history_samples else None
     sample = graph_sample_for_second(raw_samples, next_second, previous_values)
     samples = (*previous_frame.history_samples, sample)
