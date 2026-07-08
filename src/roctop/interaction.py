@@ -981,6 +981,11 @@ def include_tree_ancestors(
     if not rows:
         return []
 
+    targets = list(target_rows)
+    target_keys = {process_selection_key(proc) for proc in targets}
+    if not target_keys:
+        return []
+
     rows_by_key: dict[ProcessSelectionKey, ProcessInfo] = {}
     key_by_pid: dict[int, ProcessSelectionKey] = {}
     for proc in rows:
@@ -988,13 +993,18 @@ def include_tree_ancestors(
         if key in rows_by_key:
             continue
         rows_by_key[key] = proc
-        key_by_pid.setdefault(proc.pid, key)
+        existing_key = key_by_pid.get(proc.pid)
+        if existing_key is None or (key in target_keys and existing_key not in target_keys):
+            key_by_pid[proc.pid] = key
 
     included_keys: set[ProcessSelectionKey] = set()
-    for proc in target_rows:
+    for proc in targets:
         key = process_selection_key(proc)
-        while key in rows_by_key and key not in included_keys:
-            included_keys.add(key)
+        path: list[ProcessSelectionKey] = []
+        seen_path_keys: set[ProcessSelectionKey] = set()
+        while key in rows_by_key and key not in seen_path_keys:
+            seen_path_keys.add(key)
+            path.append(key)
             parent_pid = rows_by_key[key].ppid
             if parent_pid is None:
                 break
@@ -1002,6 +1012,14 @@ def include_tree_ancestors(
             if parent_key is None or parent_key == key:
                 break
             key = parent_key
+        # Keep off-focus rows only as context above the first focused row.
+        matched_ancestor_seen = False
+        for path_key in reversed(path):
+            if path_key in target_keys:
+                matched_ancestor_seen = True
+                included_keys.add(path_key)
+            elif not matched_ancestor_seen:
+                included_keys.add(path_key)
 
     return [proc for proc in rows if process_selection_key(proc) in included_keys]
 

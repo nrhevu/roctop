@@ -331,6 +331,25 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual([row.pid for row in display], [1, 10, 11])
         self.assertEqual([row.gpu_index for row in display], [None, None, 7])
 
+    def test_tree_gpu_focus_hides_nonmatching_descendants(self) -> None:
+        processes = [
+            ProcessInfo(gpu_index=None, pid=1, args="init"),
+            proc(10, gpu_index=4, ppid=1, args="gpu-4-launcher"),
+            proc(20, gpu_index=0, ppid=10, args="gpu-0-controller"),
+            proc(30, gpu_index=4, ppid=20, args="gpu-4-child"),
+            proc(40, gpu_index=0, ppid=30, args="gpu-0-worker"),
+            proc(50, gpu_index=4, ppid=20, args="gpu-4-sibling"),
+            proc(35, gpu_index=0, ppid=20, args="gpu-0-child"),
+        ]
+        state = ProcessViewState(tree_mode=True, gpu_filter_index=0, viewport_rows=7)
+
+        display = state.display_processes(processes)
+
+        self.assertEqual([row.pid for row in display], [1, 10, 20, 35, 40])
+        self.assertEqual([row.gpu_index for row in display], [None, 4, 0, 0, 0])
+        self.assertNotIn("gpu-4-child", [row.args for row in display])
+        self.assertNotIn("gpu-4-sibling", [row.args for row in display])
+
     def test_tree_mode_p_jumps_to_visible_parent_process(self) -> None:
         processes = [
             ProcessInfo(gpu_index=None, pid=10, args="parent"),
