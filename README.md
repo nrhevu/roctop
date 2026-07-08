@@ -6,7 +6,7 @@ and GPU processes in a refreshing terminal UI.
 
 ## Demo
 
-![roctop demo](https://raw.githubusercontent.com/nrhevu/roctop/v0.4.3/docs/demo.svg)
+![roctop demo](https://raw.githubusercontent.com/nrhevu/roctop/v0.4.4/docs/demo.svg)
 
 The demo is rendered from synthetic data; process names, PIDs, users, and metrics are placeholders.
 
