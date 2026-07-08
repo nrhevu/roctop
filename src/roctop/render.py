@@ -981,6 +981,8 @@ def focused_gpu_metrics_rows(
         ("Proc Host MEM", optional_percent_text(process_host_mem_percent)),
         ("Driver", gpu_info_text(driver_version)),
         ("PCIe", gpu_info_text(gpu.pcie_bus)),
+        ("PCIe Link", gpu_info_text(pcie_link_summary(gpu))),
+        ("PCIe Throughput", gpu_info_text(pcie_throughput_summary(gpu))),
         ("VBIOS", gpu_info_text(gpu.vbios_version)),
         ("Voltage", gpu_info_text(f"{gpu.voltage_mv:.0f}mV" if gpu.voltage_mv is not None else "")),
         ("Name", gpu_info_text(gpu.name)),
@@ -1013,6 +1015,35 @@ def top_process_gpu_memory(proc: ProcessInfo | None) -> str:
     if proc is None:
         return ""
     return f"{format_bytes_mib(proc.gpu_memory_bytes)} ({percent_text(proc.gpu_memory_percent, digits=1)})"
+
+
+def pcie_link_summary(gpu: GpuInfo) -> str:
+    current_link = pcie_link_text(gpu.pcie_current_link_speed, gpu.pcie_current_link_width)
+    max_link = pcie_link_text(gpu.pcie_max_link_speed, gpu.pcie_max_link_width)
+    if current_link and max_link and current_link != max_link:
+        return f"{current_link} (max {max_link})"
+    return current_link or max_link
+
+
+def pcie_link_text(speed: str, width: str) -> str:
+    speed = speed.strip()
+    width = width.strip()
+    if speed and width:
+        return f"{speed} {width}"
+    return speed or width
+
+
+def pcie_throughput_summary(gpu: GpuInfo) -> str:
+    rx = gpu.pcie_rx_throughput.strip()
+    tx = gpu.pcie_tx_throughput.strip()
+    if rx or tx:
+        parts = []
+        if rx:
+            parts.append(f"RX {rx}")
+        if tx:
+            parts.append(f"TX {tx}")
+        return " / ".join(parts)
+    return gpu.pcie_throughput.strip()
 
 
 def gpu_info_text(value: str, style: str = DRACULA_FG) -> Text:

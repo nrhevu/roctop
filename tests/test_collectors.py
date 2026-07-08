@@ -556,6 +556,13 @@ class CollectorTests(unittest.TestCase):
                         },
                         "vbios": {"version": "113-D7020100-100"},
                         "bus": {"bdf": "0000:03:00.0"},
+                        "pcie": {
+                            "width": 16,
+                            "speed": {"value": 32, "unit": "GT/s"},
+                            "bandwidth": {"value": 120, "unit": "Mb/s"},
+                            "current_bandwidth_sent": {"value": 40, "unit": "Mb/s"},
+                            "current_bandwidth_received": {"value": 80, "unit": "Mb/s"},
+                        },
                         "board": {"sku": "APM107573"},
                         "limit": {"max_power": {"value": "300", "unit": "W"}},
                         "perf": {"performance_level": "auto"},
@@ -583,6 +590,11 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].sku, "APM107573")
         self.assertEqual(gpus[0].vbios_version, "113-D7020100-100")
         self.assertEqual(gpus[0].pcie_bus, "0000:03:00.0")
+        self.assertEqual(gpus[0].pcie_current_link_speed, "32 GT/s")
+        self.assertEqual(gpus[0].pcie_current_link_width, "x16")
+        self.assertEqual(gpus[0].pcie_throughput, "120 Mb/s")
+        self.assertEqual(gpus[0].pcie_tx_throughput, "40 Mb/s")
+        self.assertEqual(gpus[0].pcie_rx_throughput, "80 Mb/s")
         self.assertEqual(gpus[0].max_power_w, 300.0)
         self.assertEqual(gpus[0].performance_level, "auto")
         self.assertEqual(gpus[0].throttle_status, "THERMAL")
@@ -592,6 +604,43 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].memory_used_bytes, 296 * 1024**2)
         self.assertEqual(gpus[0].memory_total_bytes, int(287.7 * 1024**3))
         self.assertEqual(gpus[0].utilization_percent, 12.5)
+
+    def test_enrich_gpus_with_sysfs_pcie_reads_link_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            devices_path = Path(temp_dir)
+            device_path = devices_path / "0000:03:00.0"
+            device_path.mkdir()
+            (device_path / "current_link_speed").write_text("16.0 GT/s PCIe\n", encoding="utf-8")
+            (device_path / "current_link_width").write_text("16\n", encoding="utf-8")
+            (device_path / "max_link_speed").write_text("32.0 GT/s PCIe\n", encoding="utf-8")
+            (device_path / "max_link_width").write_text("16\n", encoding="utf-8")
+
+            gpu = GpuInfo(index=0, pcie_bus="03:00.0")
+            collectors.enrich_gpus_with_sysfs_pcie([gpu], devices_path)
+
+        self.assertEqual(gpu.pcie_current_link_speed, "16 GT/s")
+        self.assertEqual(gpu.pcie_current_link_width, "x16")
+        self.assertEqual(gpu.pcie_max_link_speed, "32 GT/s")
+        self.assertEqual(gpu.pcie_max_link_width, "x16")
+
+    def test_parse_amd_smi_gpu_json_reads_pcie_only_metric_entry(self) -> None:
+        gpus = parse_amd_smi_gpu_json(
+            [
+                {
+                    "gpu": 0,
+                    "pcie": {
+                        "width": 8,
+                        "speed": {"value": 16, "unit": "GT/s"},
+                        "current_bandwidth_received": {"value": 12, "unit": "Mb/s"},
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(len(gpus), 1)
+        self.assertEqual(gpus[0].pcie_current_link_speed, "16 GT/s")
+        self.assertEqual(gpus[0].pcie_current_link_width, "x8")
+        self.assertEqual(gpus[0].pcie_rx_throughput, "12 Mb/s")
 
     def test_parse_rocm_smi_json_sets_fallback_process_memory_percent(self) -> None:
         gpus, processes, _driver = parse_rocm_smi_json(
@@ -617,6 +666,21 @@ class CollectorTests(unittest.TestCase):
 
         self.assertEqual(gpus[0].throttle_status, "THERMAL")
         self.assertEqual(gpus[0].voltage_mv, 1138.0)
+
+    def test_parse_rocm_smi_json_reads_pcie_metrics(self) -> None:
+        gpus, _processes, _driver = parse_rocm_smi_json(
+            {
+                "card0": {
+                    "PCIe Link Speed": {"value": 160, "unit": "0.1 GT/s"},
+                    "PCIe Link Width": "16",
+                    "Estimated maximum PCIe bandwidth over the last second (MB/s)": "123.456",
+                }
+            }
+        )
+
+        self.assertEqual(gpus[0].pcie_current_link_speed, "16 GT/s")
+        self.assertEqual(gpus[0].pcie_current_link_width, "x16")
+        self.assertEqual(gpus[0].pcie_throughput, "123.456 MB/s")
 
     def test_parse_rocm_smi_json_treats_unsupported_optional_floats_as_missing(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .formatting import clamp_percent, parse_int, parse_number
 from .models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
@@ -27,6 +27,7 @@ ROCM_SMI_ARGS = [
     "--showserial",
     "--showuniqueid",
     "--showbus",
+    "--showbw",
     "--showuse",
     "--showmeminfo",
     "vram",
@@ -129,6 +130,7 @@ _amd_smi_process_backoff_until = 0.0
 _amd_smi_gpu_detail_backoff_until = 0.0
 _ps_row_cache: dict[int, tuple[float, dict[str, str]]] = {}
 PROC_ROOT = Path("/proc")
+SYSFS_PCI_DEVICES_PATH = Path("/sys/bus/pci/devices")
 
 
 @dataclass(slots=True)
@@ -212,6 +214,7 @@ def _collect_snapshot(now: datetime | None = None) -> Snapshot:
         raise CollectionError("rocm-smi returned invalid JSON root")
     gpus, rocm_processes, driver_version = parse_rocm_smi_json(rocm_data)
     amd_smi_driver_version = merge_amd_smi_gpu_detail_commands(gpus, amd_gpu_detail_commands, warnings)
+    enrich_gpus_with_sysfs_pcie(gpus)
     if not driver_version:
         driver_version = amd_smi_driver_version
 
@@ -382,6 +385,49 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
                     value.get("PCI BDF"),
                     value.get("Bus"),
                 ),
+                pcie_current_link_speed=pcie_link_speed_field(
+                    value.items(),
+                    (
+                        "pcie_link_speed",
+                        "pcie_speed",
+                        "current_pcie_link_speed",
+                        "current_link_speed",
+                    ),
+                ),
+                pcie_current_link_width=pcie_link_width_field(
+                    value.items(),
+                    (
+                        "pcie_link_width",
+                        "pcie_width",
+                        "current_pcie_link_width",
+                        "current_link_width",
+                    ),
+                ),
+                pcie_throughput=pcie_metric_text_field(
+                    value.items(),
+                    (
+                        "estimated_maximum_pcie_bandwidth_over_the_last_second_mb_s",
+                        "pcie_bandwidth_inst",
+                        "pcie_bandwidth",
+                        "pcie_bw",
+                    ),
+                ),
+                pcie_tx_throughput=pcie_metric_text_field(
+                    value.items(),
+                    (
+                        "current_bandwidth_sent",
+                        "pcie_tx_throughput",
+                        "pcie_tx_bandwidth",
+                    ),
+                ),
+                pcie_rx_throughput=pcie_metric_text_field(
+                    value.items(),
+                    (
+                        "current_bandwidth_received",
+                        "pcie_rx_throughput",
+                        "pcie_rx_bandwidth",
+                    ),
+                ),
                 max_power_w=parse_optional_float(
                     first_non_empty(
                         value.get("Max Socket Graphics Package Power (W)"),
@@ -550,6 +596,48 @@ def parse_amd_smi_gpu_json(data: Any) -> list[GpuInfo]:
                 vendor=amd_smi_text_field(fields, ("vendor_name", "vendor")),
                 vbios_version=amd_smi_text_field(fields, ("vbios_version", "vbios")),
                 pcie_bus=amd_smi_text_field(fields, ("bdf", "pci_bdf", "pcie_bdf", "pci_bus", "pcie_bus", "bus_id")),
+                pcie_current_link_speed=pcie_link_speed_field(
+                    fields,
+                    (
+                        "pcie_speed",
+                        "pcie_link_speed",
+                        "current_pcie_link_speed",
+                        "current_link_speed",
+                    ),
+                ),
+                pcie_current_link_width=pcie_link_width_field(
+                    fields,
+                    (
+                        "pcie_width",
+                        "pcie_link_width",
+                        "current_pcie_link_width",
+                        "current_link_width",
+                    ),
+                ),
+                pcie_throughput=pcie_metric_text_field(
+                    fields,
+                    (
+                        "pcie_bandwidth",
+                        "pcie_bandwidth_inst",
+                        "pcie_bw",
+                    ),
+                ),
+                pcie_tx_throughput=pcie_metric_text_field(
+                    fields,
+                    (
+                        "current_bandwidth_sent",
+                        "pcie_tx_throughput",
+                        "pcie_tx_bandwidth",
+                    ),
+                ),
+                pcie_rx_throughput=pcie_metric_text_field(
+                    fields,
+                    (
+                        "current_bandwidth_received",
+                        "pcie_rx_throughput",
+                        "pcie_rx_bandwidth",
+                    ),
+                ),
                 max_power_w=amd_smi_float_field(
                     fields,
                     ("max_power", "max_power_w", "power_cap", "power_limit", "max_socket_power"),
@@ -621,6 +709,13 @@ def fill_missing_gpu_detail(target: GpuInfo, source: GpuInfo) -> None:
         "vendor",
         "vbios_version",
         "pcie_bus",
+        "pcie_current_link_speed",
+        "pcie_current_link_width",
+        "pcie_max_link_speed",
+        "pcie_max_link_width",
+        "pcie_throughput",
+        "pcie_tx_throughput",
+        "pcie_rx_throughput",
         "performance_level",
         "throttle_status",
         "unique_id",
@@ -657,6 +752,173 @@ def fill_gpu_optional_field(target: GpuInfo, source: GpuInfo, field_name: str) -
     source_value = getattr(source, field_name)
     if source_value is not None:
         setattr(target, field_name, source_value)
+
+
+def enrich_gpus_with_sysfs_pcie(
+    gpus: list[GpuInfo],
+    devices_path: Path = SYSFS_PCI_DEVICES_PATH,
+) -> None:
+    for gpu in gpus:
+        device_path = sysfs_pci_device_path(gpu.pcie_bus, devices_path)
+        if device_path is None:
+            continue
+        if not gpu.pcie_current_link_speed:
+            gpu.pcie_current_link_speed = pcie_link_speed_text(
+                read_sysfs_pci_field(device_path, "current_link_speed")
+            )
+        if not gpu.pcie_current_link_width:
+            gpu.pcie_current_link_width = pcie_link_width_text(
+                read_sysfs_pci_field(device_path, "current_link_width")
+            )
+        if not gpu.pcie_max_link_speed:
+            gpu.pcie_max_link_speed = pcie_link_speed_text(
+                read_sysfs_pci_field(device_path, "max_link_speed")
+            )
+        if not gpu.pcie_max_link_width:
+            gpu.pcie_max_link_width = pcie_link_width_text(
+                read_sysfs_pci_field(device_path, "max_link_width")
+            )
+
+
+def sysfs_pci_device_path(pcie_bus: str, devices_path: Path) -> Path | None:
+    for candidate in sysfs_pci_bus_candidates(pcie_bus):
+        path = devices_path / candidate
+        if path.exists():
+            return path
+    return None
+
+
+def sysfs_pci_bus_candidates(pcie_bus: str) -> list[str]:
+    text = first_non_empty(pcie_bus)
+    if not text:
+        return []
+    candidates = [text]
+    if re.fullmatch(r"[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]", text):
+        candidates.append(f"0000:{text}")
+    return candidates
+
+
+def read_sysfs_pci_field(device_path: Path, name: str) -> str:
+    try:
+        return (device_path / name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def pcie_link_speed_field(fields: Iterable[tuple[Any, Any]], aliases: tuple[str, ...]) -> str:
+    return pcie_text_field(fields, aliases, pcie_link_speed_text)
+
+
+def pcie_link_width_field(fields: Iterable[tuple[Any, Any]], aliases: tuple[str, ...]) -> str:
+    return pcie_text_field(fields, aliases, pcie_link_width_text)
+
+
+def pcie_metric_text_field(fields: Iterable[tuple[Any, Any]], aliases: tuple[str, ...]) -> str:
+    return pcie_text_field(fields, aliases, pcie_metric_text)
+
+
+def pcie_text_field(
+    fields: Iterable[tuple[Any, Any]],
+    aliases: tuple[str, ...],
+    formatter,
+) -> str:
+    field_list = list(fields)
+    for alias in aliases:
+        for key, value in field_list:
+            if not pcie_key_matches_alias(key, alias):
+                continue
+            text = formatter(value, key)
+            if text:
+                return text
+    return ""
+
+
+def pcie_key_matches_alias(key: Any, alias: str) -> bool:
+    parts = [normalize_amd_smi_key(part) for part in str(key or "").split(".")]
+    normalized_key = ".".join(part for part in parts if part)
+    return amd_smi_key_matches_alias(normalized_key, alias)
+
+
+def pcie_value_and_unit(value: Any) -> tuple[Any, str]:
+    if isinstance(value, dict):
+        return value.get("value"), first_non_empty(value.get("unit"))
+    return value, ""
+
+
+def pcie_link_speed_text(value: Any, key: Any = "") -> str:
+    raw_value, unit = pcie_value_and_unit(value)
+    text = first_non_empty(raw_value)
+    if not text or "not supported" in text.lower():
+        return ""
+    number = parse_optional_float(text)
+    unit_text = unit or pcie_unit_from_key(key)
+    normalized_unit = unit_text.lower().replace(" ", "")
+    if number is not None and normalized_unit in ("0.1gt/s", "0_1gt/s"):
+        return f"{number / 10.0:g} GT/s"
+    if number is not None and normalized_unit == "gt/s":
+        return f"{number:g} GT/s"
+    match = re.search(r"([-+]?\d+(?:\.\d+)?)\s*GT/s", text, flags=re.IGNORECASE)
+    if match:
+        return f"{float(match.group(1)):g} GT/s"
+    return text
+
+
+def pcie_link_width_text(value: Any, key: Any = "") -> str:
+    raw_value, _unit = pcie_value_and_unit(value)
+    text = first_non_empty(raw_value)
+    if not text or "not supported" in text.lower():
+        return ""
+    if text.lower().startswith("x"):
+        return f"x{text[1:].strip()}"
+    number = parse_int_from_text(text)
+    return f"x{number}" if number is not None else text
+
+
+def pcie_metric_text(value: Any, key: Any = "") -> str:
+    raw_value, unit = pcie_value_and_unit(value)
+    text = first_non_empty(raw_value)
+    if not text or "not supported" in text.lower():
+        return ""
+    if re.search(r"\d\s*[KMGT]i?B/s", text, flags=re.IGNORECASE):
+        return normalize_spacing(text)
+    unit_text = unit or pcie_unit_from_key(key)
+    if unit_text:
+        return f"{metric_number_text(text)} {unit_text}"
+    return text
+
+
+def pcie_unit_from_key(key: Any) -> str:
+    text = str(key or "")
+    match = re.search(r"\(([^()]+/s)\)", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    normalized = normalize_amd_smi_key(text)
+    suffix_units = (
+        ("mib_s", "MiB/s"),
+        ("gib_s", "GiB/s"),
+        ("kib_s", "KiB/s"),
+        ("mb_s", "MB/s"),
+        ("gb_s", "GB/s"),
+        ("kb_s", "KB/s"),
+        ("mbps", "Mb/s"),
+        ("gbps", "Gb/s"),
+        ("kbps", "Kb/s"),
+    )
+    for suffix, unit in suffix_units:
+        if normalized.endswith(f"_{suffix}"):
+            return unit
+    return ""
+
+
+def metric_number_text(value: Any) -> str:
+    number = parse_optional_float(value)
+    if number is None:
+        return first_non_empty(value)
+    return f"{number:g}"
+
+
+def normalize_spacing(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip())
 
 
 def iter_amd_smi_gpu_entries(data: Any, fallback_index: int | None = None):
@@ -712,6 +974,10 @@ def amd_smi_fields_have_gpu_detail(fields: list[tuple[str, Any]]) -> bool:
         "voltage",
         "memory_total",
         "gpu_utilization",
+        "pcie_bandwidth",
+        "pcie_link_speed",
+        "pcie_speed",
+        "pcie_width",
     )
     return any(amd_smi_key_matches_alias(key, alias) for key, _value in fields for alias in detail_aliases)
 

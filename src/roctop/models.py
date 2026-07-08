@@ -15,6 +15,13 @@ class GpuInfo:
     vendor: str = ""
     vbios_version: str = ""
     pcie_bus: str = ""
+    pcie_current_link_speed: str = ""
+    pcie_current_link_width: str = ""
+    pcie_max_link_speed: str = ""
+    pcie_max_link_width: str = ""
+    pcie_throughput: str = ""
+    pcie_tx_throughput: str = ""
+    pcie_rx_throughput: str = ""
     max_power_w: float | None = None
     performance_level: str = ""
     throttle_status: str = ""

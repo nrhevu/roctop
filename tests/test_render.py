@@ -233,6 +233,12 @@ class RenderTests(unittest.TestCase):
                     vendor="Advanced Micro Devices, Inc. [AMD/ATI]",
                     vbios_version="113-D7020100-100",
                     pcie_bus="0000:03:00.0",
+                    pcie_current_link_speed="16 GT/s",
+                    pcie_current_link_width="x16",
+                    pcie_max_link_speed="32 GT/s",
+                    pcie_max_link_width="x16",
+                    pcie_tx_throughput="40 Mb/s",
+                    pcie_rx_throughput="80 Mb/s",
                     max_power_w=300,
                     performance_level="auto",
                     throttle_status="THERMAL",
@@ -308,6 +314,8 @@ class RenderTests(unittest.TestCase):
         self.assertIn("VBIOS: 113-D7020100-100", output)
         self.assertIn("Driver: 6.14.14", output)
         self.assertIn("PCIe: 0000:03:00.0", output)
+        self.assertIn("PCIe Link: 16 GT/s x16 (max 32 GT/s x16)", output)
+        self.assertIn("PCIe Throughput: RX 80 Mb/s / TX 40 Mb/s", output)
         self.assertIn("Temperature: 64°C", output)
         self.assertIn("Fan: 50%", output)
         self.assertIn("Power:", output)
@@ -351,7 +359,7 @@ class RenderTests(unittest.TestCase):
                 and "Processes: 2" in line
                 and "Temperature:" in line
                 and "Proc CPU:" in line
-                and "Architecture:" in line
+                and "Name:" in line
                 for line in focused_metric_lines
             )
         )
