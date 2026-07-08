@@ -62,6 +62,23 @@ class ProcessInfo:
 
 
 @dataclass(slots=True)
+class ContainerInfo:
+    runtime: str = "unknown"
+    container_id: str = ""
+    containerd_namespace: str = ""
+    orchestrator: str = ""
+    name: str = ""
+    image: str = ""
+    image_id: str = ""
+    k8s_namespace: str = ""
+    k8s_pod_name: str = ""
+    k8s_pod_uid: str = ""
+    k8s_container_name: str = ""
+    k8s_sandbox_id: str = ""
+    source: str = "proc"
+
+
+@dataclass(slots=True)
 class ProcessDetailInfo:
     pid: int
     state: str = ""
@@ -76,6 +93,7 @@ class ProcessDetailInfo:
     cwd: str = ""
     exe: str = ""
     error: str = ""
+    container: ContainerInfo | None = None
 
 
 @dataclass(slots=True)

@@ -34,7 +34,7 @@ from .interaction import (
     elapsed_seconds,
     process_selection_key,
 )
-from .models import GpuInfo, ProcessInfo, Snapshot
+from .models import ContainerInfo, GpuInfo, ProcessInfo, Snapshot
 from .profiling import profile_span
 
 DRACULA_GREEN = "#50fa7b"
@@ -737,11 +737,15 @@ def process_info_rows(snapshot: Snapshot, process_state: ProcessViewState) -> li
         ("Elapsed", proc.elapsed or "-"),
         ("Parent", process_info_parent(process_state)),
         ("Visible children", str(process_state.process_info_child_count)),
-        ("Command", process_command(proc) or "-"),
     ]
     if detail is None:
+        rows.append(("Command", process_command(proc) or "-"))
         rows.append(("Status", "No /proc detail loaded"))
         return rows
+
+    if detail.container is not None:
+        rows.extend(process_info_container_rows(detail.container))
+    rows.append(("Command", process_command(proc) or "-"))
 
     rows.extend(
         [
@@ -764,6 +768,40 @@ def process_info_rows(snapshot: Snapshot, process_state: ProcessViewState) -> li
     if detail.error:
         rows.append(("Status", detail.error))
     return rows
+
+
+def process_info_container_rows(container: ContainerInfo) -> list[tuple[str, str]]:
+    rows = [
+        ("Container", process_info_container_summary(container)),
+        ("Container ID", container.container_id),
+        ("Container name", container.name),
+        ("Image", container.image),
+        ("K8s pod", process_info_k8s_pod(container)),
+        ("K8s namespace", container.k8s_namespace),
+        ("K8s container", container.k8s_container_name),
+        ("K8s pod UID", container.k8s_pod_uid),
+        ("K8s sandbox", container.k8s_sandbox_id),
+        ("Container source", container.source),
+    ]
+    return [(label, value) for label, value in rows if value]
+
+
+def process_info_container_summary(container: ContainerInfo) -> str:
+    runtime = container.runtime or "unknown"
+    if container.containerd_namespace:
+        runtime = f"{runtime}/{container.containerd_namespace}"
+    short_id = short_container_id(container.container_id)
+    return f"{runtime} {short_id}".strip()
+
+
+def short_container_id(container_id: str) -> str:
+    return container_id[:12] if container_id else ""
+
+
+def process_info_k8s_pod(container: ContainerInfo) -> str:
+    if container.k8s_namespace and container.k8s_pod_name:
+        return f"{container.k8s_namespace}/{container.k8s_pod_name}"
+    return container.k8s_pod_name or container.k8s_namespace
 
 
 def process_info_gpu_model(gpu: GpuInfo | None) -> str:

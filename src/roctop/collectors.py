@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .formatting import clamp_percent, parse_int, parse_number
-from .models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
+from .models import ContainerInfo, GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 from .profiling import profile_span
 
 
@@ -56,6 +56,7 @@ AMD_SMI_GPU_DETAIL_TIMEOUT_SECONDS = 1.5
 AMD_SMI_GPU_DETAIL_BACKOFF_SECONDS = 10.0
 PS_TIMEOUT_SECONDS = 1.0
 PS_CACHE_TTL_SECONDS = 2.0
+CONTAINER_INSPECT_TIMEOUT_SECONDS = 0.3
 AMD_PCI_VENDOR_ID = "1002"
 PCI_IDS_PATHS = (
     Path("/usr/share/misc/pci.ids"),
@@ -1328,10 +1329,313 @@ def read_process_detail(pid: int, proc_root: Path | str = PROC_ROOT) -> ProcessD
     if cmdline:
         detail.cmdline = decode_proc_cmdline(cmdline)
 
+    cgroup_text = read_optional_proc_text(proc_dir / "cgroup")
+    container = parse_container_info_from_cgroup(cgroup_text)
+    if container is not None:
+        detail.container = enrich_container_info(container)
+        apply_k8s_namespace_from_proc_root(detail.container, proc_dir)
+
     detail.cwd = read_proc_link(proc_dir / "cwd", "cwd", errors)
     detail.exe = read_proc_link(proc_dir / "exe", "exe", errors)
     detail.error = "; ".join(dedupe_preserving_order(errors))
     return detail
+
+
+def read_optional_proc_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, PermissionError, OSError):
+        return ""
+
+
+CONTAINER_ID_RE = r"[0-9a-fA-F]{32,64}"
+
+
+def parse_container_info_from_cgroup(cgroup_text: str) -> ContainerInfo | None:
+    candidates: list[tuple[int, ContainerInfo]] = []
+    for line in cgroup_text.splitlines():
+        path = cgroup_path_from_line(line)
+        candidate = container_info_from_cgroup_path(path)
+        if candidate is not None:
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    _score, container = max(candidates, key=lambda item: item[0])
+    return container
+
+
+def cgroup_path_from_line(line: str) -> str:
+    parts = line.strip().split(":", 2)
+    if len(parts) == 3:
+        return parts[2]
+    return line.strip()
+
+
+def container_info_from_cgroup_path(path: str) -> tuple[int, ContainerInfo] | None:
+    lower_path = path.lower()
+    orchestrator = "kubernetes" if "kubepods" in lower_path else ""
+
+    match = re.search(rf"cri-containerd-({CONTAINER_ID_RE})(?:\.scope)?", path, flags=re.IGNORECASE)
+    if match:
+        return (
+            100,
+            ContainerInfo(
+                runtime="containerd",
+                container_id=match.group(1).lower(),
+                containerd_namespace="k8s.io",
+                orchestrator="kubernetes",
+            ),
+        )
+
+    match = re.search(rf"crio-({CONTAINER_ID_RE})(?:\.scope)?", path, flags=re.IGNORECASE)
+    if match:
+        return (
+            100,
+            ContainerInfo(
+                runtime="cri-o",
+                container_id=match.group(1).lower(),
+                orchestrator="kubernetes",
+            ),
+        )
+
+    docker_match = re.search(rf"(?:^|/)docker/({CONTAINER_ID_RE})(?:\.scope)?(?:/|$)", path, flags=re.IGNORECASE)
+    docker_scope_match = re.search(rf"docker-({CONTAINER_ID_RE})(?:\.scope)?", path, flags=re.IGNORECASE)
+    match = docker_match or docker_scope_match
+    if match:
+        return (
+            90,
+            ContainerInfo(
+                runtime="docker",
+                container_id=match.group(1).lower(),
+                containerd_namespace="" if orchestrator else "moby",
+                orchestrator=orchestrator or "docker",
+            ),
+        )
+
+    match = re.search(rf"(?:^|/)({CONTAINER_ID_RE})(?:\.scope)?(?:/|$)", path, flags=re.IGNORECASE)
+    if match:
+        if orchestrator:
+            return (
+                70,
+                ContainerInfo(
+                    runtime="containerd",
+                    container_id=match.group(1).lower(),
+                    containerd_namespace="k8s.io",
+                    orchestrator="kubernetes",
+                ),
+            )
+        return (20, ContainerInfo(runtime="unknown", container_id=match.group(1).lower()))
+
+    return None
+
+
+def enrich_container_info(container: ContainerInfo) -> ContainerInfo:
+    if not container.container_id:
+        return container
+    for source, args in container_inspect_commands(container):
+        data = load_container_inspect_json(args)
+        if data is None:
+            continue
+        if apply_container_inspect_data(container, source, data):
+            return container
+    return container
+
+
+def apply_k8s_namespace_from_proc_root(container: ContainerInfo, proc_dir: Path) -> None:
+    if container.k8s_namespace:
+        return
+    if container.orchestrator != "kubernetes" and container.containerd_namespace != "k8s.io":
+        return
+    namespace = read_optional_proc_text(
+        proc_dir / "root" / "var" / "run" / "secrets" / "kubernetes.io" / "serviceaccount" / "namespace"
+    ).strip()
+    if namespace:
+        container.k8s_namespace = namespace
+        container.orchestrator = "kubernetes"
+
+
+def container_inspect_commands(container: ContainerInfo) -> list[tuple[str, list[str]]]:
+    container_id = container.container_id
+    commands: list[tuple[str, list[str]]] = []
+
+    if container.runtime == "cri-o":
+        commands.append(("crictl", ["crictl", "inspect", "--output", "json", container_id]))
+    elif container.orchestrator == "kubernetes" or container.containerd_namespace == "k8s.io":
+        commands.append(("crictl", ["crictl", "inspect", "--output", "json", container_id]))
+        if container.runtime == "containerd" or container.containerd_namespace == "k8s.io":
+            commands.append(("ctr", ["ctr", "-n", "k8s.io", "containers", "info", container_id]))
+        if container.runtime == "docker":
+            commands.append(("docker", ["docker", "inspect", container_id]))
+    elif container.runtime == "docker" or container.containerd_namespace == "moby":
+        commands.append(("docker", ["docker", "inspect", container_id]))
+        commands.append(("ctr", ["ctr", "-n", "moby", "containers", "info", container_id]))
+    else:
+        commands.append(("crictl", ["crictl", "inspect", "--output", "json", container_id]))
+        commands.append(("docker", ["docker", "inspect", container_id]))
+
+    deduped: list[tuple[str, list[str]]] = []
+    seen: set[tuple[str, ...]] = set()
+    for source, args in commands:
+        key = tuple(args)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((source, args))
+    return deduped
+
+
+def load_container_inspect_json(args: list[str]) -> Any | None:
+    try:
+        result = run_command(args, timeout=CONTAINER_INSPECT_TIMEOUT_SECONDS)
+        if result.returncode != 0:
+            return None
+        return load_json_from_text(result.stdout)
+    except (CollectionError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def apply_container_inspect_data(container: ContainerInfo, source: str, data: Any) -> bool:
+    if source == "crictl":
+        changed = apply_crictl_container_data(container, data)
+    elif source == "docker":
+        changed = apply_docker_container_data(container, data)
+    elif source == "ctr":
+        changed = apply_ctr_container_data(container, data)
+    else:
+        changed = False
+    if changed:
+        container.source = source
+    return changed
+
+
+def apply_crictl_container_data(container: ContainerInfo, data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    status = as_dict(data.get("status"))
+    info = as_dict(data.get("info"))
+    metadata = as_dict(status.get("metadata"))
+    image = as_dict(status.get("image"))
+    labels = merged_string_map(
+        status.get("labels"),
+        nested_value(status, ("config", "labels")),
+        nested_value(info, ("config", "labels")),
+        nested_value(info, ("runtimeSpec", "annotations")),
+    )
+
+    changed = False
+    changed |= fill_container_field(container, "container_id", string_value(status.get("id")))
+    changed |= fill_container_field(container, "name", string_value(metadata.get("name")))
+    changed |= fill_container_field(container, "image", string_value(image.get("image")))
+    changed |= fill_container_field(container, "image_id", string_value(status.get("imageRef")))
+    changed |= apply_k8s_container_labels(container, labels)
+    if container.orchestrator == "kubernetes":
+        changed |= fill_container_field(container, "containerd_namespace", "k8s.io")
+    return changed
+
+
+def apply_docker_container_data(container: ContainerInfo, data: Any) -> bool:
+    if isinstance(data, list) and data:
+        entry = data[0]
+    else:
+        entry = data
+    if not isinstance(entry, dict):
+        return False
+    config = as_dict(entry.get("Config"))
+    labels = merged_string_map(config.get("Labels"))
+
+    changed = False
+    changed |= fill_container_field(container, "container_id", string_value(entry.get("Id")).lower())
+    changed |= fill_container_field(container, "name", string_value(entry.get("Name")).lstrip("/"))
+    changed |= fill_container_field(container, "image", string_value(config.get("Image")))
+    changed |= fill_container_field(container, "image_id", string_value(entry.get("Image")))
+    changed |= apply_k8s_container_labels(container, labels)
+    if not container.orchestrator:
+        changed |= fill_container_field(container, "orchestrator", "docker")
+    if container.runtime == "unknown":
+        container.runtime = "docker"
+        changed = True
+    return changed
+
+
+def apply_ctr_container_data(container: ContainerInfo, data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    labels = merged_string_map(data.get("Labels"), data.get("labels"))
+
+    changed = False
+    changed |= fill_container_field(container, "container_id", string_value(data.get("ID") or data.get("id")).lower())
+    changed |= fill_container_field(container, "name", string_value(data.get("Name") or data.get("name")))
+    changed |= fill_container_field(container, "image", string_value(data.get("Image") or data.get("image")))
+    changed |= fill_container_field(container, "image_id", string_value(data.get("ImageID") or data.get("imageID")))
+    changed |= apply_k8s_container_labels(container, labels)
+    if container.orchestrator == "kubernetes":
+        changed |= fill_container_field(container, "containerd_namespace", "k8s.io")
+    return changed
+
+
+def apply_k8s_container_labels(container: ContainerInfo, labels: dict[str, str]) -> bool:
+    changed = False
+    changed |= fill_container_field(container, "k8s_namespace", labels.get("io.kubernetes.pod.namespace", ""))
+    changed |= fill_container_field(container, "k8s_pod_name", labels.get("io.kubernetes.pod.name", ""))
+    changed |= fill_container_field(container, "k8s_pod_uid", labels.get("io.kubernetes.pod.uid", ""))
+    changed |= fill_container_field(container, "k8s_container_name", labels.get("io.kubernetes.container.name", ""))
+    changed |= fill_container_field(container, "k8s_sandbox_id", labels.get("io.kubernetes.sandbox.id", ""))
+    has_k8s_value = any(
+        (
+            container.k8s_namespace,
+            container.k8s_pod_name,
+            container.k8s_pod_uid,
+            container.k8s_container_name,
+            container.k8s_sandbox_id,
+        )
+    )
+    if has_k8s_value:
+        if container.orchestrator != "kubernetes":
+            container.orchestrator = "kubernetes"
+            changed = True
+        if not container.name and container.k8s_container_name:
+            container.name = container.k8s_container_name
+            changed = True
+    return changed
+
+
+def fill_container_field(container: ContainerInfo, field_name: str, value: str) -> bool:
+    clean_value = string_value(value)
+    if not clean_value or getattr(container, field_name):
+        return False
+    setattr(container, field_name, clean_value)
+    return True
+
+
+def merged_string_map(*values: Any) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, item in value.items():
+            text = string_value(item)
+            if text:
+                merged[str(key)] = text
+    return merged
+
+
+def nested_value(data: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def string_value(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def read_proc_text(path: Path, label: str, errors: list[str]) -> str:

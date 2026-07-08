@@ -1207,8 +1207,35 @@ def process_info_row_count(process_state: ProcessViewState) -> int:
     count = 15
     if detail is None:
         return count + 1
+    if detail.container is not None:
+        count += process_info_container_row_count(detail.container)
     count += 10
     if detail.error:
+        count += 1
+    return count
+
+
+def process_info_container_row_count(container) -> int:
+    count = 0
+    if container.runtime or container.container_id:
+        count += 1
+    if container.container_id:
+        count += 1
+    if container.name:
+        count += 1
+    if container.image:
+        count += 1
+    if container.k8s_namespace or container.k8s_pod_name:
+        count += 1
+    if container.k8s_namespace:
+        count += 1
+    if container.k8s_container_name:
+        count += 1
+    if container.k8s_pod_uid:
+        count += 1
+    if container.k8s_sandbox_id:
+        count += 1
+    if container.source:
         count += 1
     return count
 

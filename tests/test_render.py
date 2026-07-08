@@ -22,7 +22,7 @@ from roctop.interaction import (
     ProcessViewState,
     max_process_info_scroll_offset,
 )
-from roctop.models import GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
+from roctop.models import ContainerInfo, GpuInfo, ProcessDetailInfo, ProcessInfo, Snapshot
 from roctop.render import (
     bar_with_percent,
     estimate_process_view_rows,
@@ -1316,9 +1316,83 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Exe", plain)
         self.assertIn("/usr/bin/python", plain)
         self.assertIn("--really-long-flag", plain)
+        self.assertNotIn("Container ID", plain)
         self.assertIn("j/k or Up/Down: scroll", plain)
         self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("i/Esc: close", plain)
+
+    def test_process_info_popup_renders_container_details(self) -> None:
+        container_id = "a" * 64
+        process = ProcessInfo(gpu_index=0, pid=42, user="demo", args="python train.py")
+        detail = ProcessDetailInfo(
+            pid=42,
+            container=ContainerInfo(
+                runtime="containerd",
+                container_id=container_id,
+                containerd_namespace="k8s.io",
+                orchestrator="kubernetes",
+                name="trainer",
+                image="registry.local/train:latest",
+                image_id="sha256:image-ref",
+                k8s_namespace="demo",
+                k8s_pod_name="train-pod",
+                k8s_pod_uid="pod-uid",
+                k8s_container_name="worker",
+                k8s_sandbox_id="sandbox-id",
+                source="crictl",
+            ),
+        )
+        snapshot = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0), processes=[process])
+        state = ProcessViewState(selected_pid=42, mode=MODE_PROCESS_INFO, viewport_rows=4)
+        state.open_process_info(process, detail)
+        console = Console(width=140, record=True, file=StringIO())
+        console.print(render.render_process_info_popup(snapshot, state, terminal_width=140))
+        plain = console.export_text(clear=False)
+
+        self.assertIn("Container", plain)
+        self.assertIn("containerd/k8s.io aaaaaaaaaaaa", plain)
+        self.assertIn("Container ID", plain)
+        self.assertIn(container_id, plain)
+        self.assertIn("Container name", plain)
+        self.assertIn("trainer", plain)
+        self.assertIn("Image", plain)
+        self.assertIn("registry.local/train:latest", plain)
+        self.assertIn("K8s pod", plain)
+        self.assertIn("demo/train-pod", plain)
+        self.assertIn("K8s namespace", plain)
+        self.assertIn("demo", plain)
+        self.assertIn("K8s container", plain)
+        self.assertIn("worker", plain)
+        self.assertIn("K8s pod UID", plain)
+        self.assertIn("pod-uid", plain)
+        self.assertIn("K8s sandbox", plain)
+        self.assertIn("sandbox-id", plain)
+        self.assertIn("Container source", plain)
+        self.assertIn("crictl", plain)
+
+    def test_process_info_popup_wraps_long_container_values(self) -> None:
+        process = ProcessInfo(gpu_index=None, pid=42, user="demo", args="python train.py")
+        long_image = "registry.local/" + "/".join(f"segment-{index}" for index in range(24)) + ":latest"
+        detail = ProcessDetailInfo(
+            pid=42,
+            container=ContainerInfo(
+                runtime="docker",
+                container_id="b" * 64,
+                name="trainer",
+                image=long_image,
+                source="docker",
+            ),
+        )
+        snapshot = Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0), processes=[process])
+        state = ProcessViewState(selected_pid=42, mode=MODE_PROCESS_INFO, viewport_rows=4)
+        state.open_process_info(process, detail)
+        console = Console(width=90, record=True, file=StringIO())
+        console.print(render.render_process_info_popup(snapshot, state, terminal_width=90))
+        plain = console.export_text(clear=False)
+
+        self.assertIn("Image", plain)
+        self.assertIn("registry.local", plain)
+        self.assertGreater(state.process_info_render_row_count, render.PROCESS_INFO_VISIBLE_ROWS)
 
     def test_process_info_popup_keeps_fixed_height_for_long_values(self) -> None:
         long_command = "bash -lc " + " ".join(f"--flag-{index} value-{index}" for index in range(80))

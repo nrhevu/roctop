@@ -34,6 +34,26 @@ class CollectorTests(unittest.TestCase):
         collectors._amd_smi_gpu_detail_backoff_until = 0.0
         collectors._ps_row_cache.clear()
 
+    def create_proc_detail_dir(self, proc_root: Path, pid: int = 42, cgroup_text: str = "") -> Path:
+        proc_dir = proc_root / str(pid)
+        proc_dir.mkdir()
+        (proc_dir / "status").write_text("State:\tS (sleeping)\nThreads:\t1\n", encoding="utf-8")
+        (proc_dir / "cmdline").write_bytes(b"python\0train.py\0")
+        if cgroup_text:
+            (proc_dir / "cgroup").write_text(cgroup_text, encoding="utf-8")
+        cwd_target = proc_root / "work"
+        cwd_target.mkdir(exist_ok=True)
+        exe_target = proc_root / "python"
+        exe_target.write_text("", encoding="utf-8")
+        (proc_dir / "cwd").symlink_to(cwd_target, target_is_directory=True)
+        (proc_dir / "exe").symlink_to(exe_target)
+        return proc_dir
+
+    def write_serviceaccount_namespace(self, proc_dir: Path, namespace: str) -> None:
+        namespace_path = proc_dir / "root" / "var" / "run" / "secrets" / "kubernetes.io" / "serviceaccount"
+        namespace_path.mkdir(parents=True)
+        (namespace_path / "namespace").write_text(namespace, encoding="utf-8")
+
     def test_load_json_from_text_skips_warning_prefix(self) -> None:
         data = load_json_from_text('WARNING: noisy\n{"ok": true}')
         self.assertEqual(data, {"ok": True})
@@ -323,6 +343,160 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(detail.cwd.endswith("/work"))
         self.assertTrue(detail.exe.endswith("/python"))
         self.assertNotIn("SECRET_TOKEN", str(detail))
+
+    def test_parse_container_info_from_docker_cgroup(self) -> None:
+        container_id = "a" * 64
+        container = collectors.parse_container_info_from_cgroup(f"0::/system.slice/docker-{container_id}.scope\n")
+
+        self.assertIsNotNone(container)
+        self.assertEqual(container.runtime, "docker")
+        self.assertEqual(container.container_id, container_id)
+        self.assertEqual(container.containerd_namespace, "moby")
+        self.assertEqual(container.orchestrator, "docker")
+        self.assertEqual(container.source, "proc")
+
+    def test_parse_container_info_from_k8s_containerd_cgroup(self) -> None:
+        container_id = "b" * 64
+        cgroup = (
+            "0::/kubepods.slice/kubepods-burstable.slice/"
+            "kubepods-burstable-podabc.slice/"
+            f"cri-containerd-{container_id}.scope\n"
+        )
+
+        container = collectors.parse_container_info_from_cgroup(cgroup)
+
+        self.assertIsNotNone(container)
+        self.assertEqual(container.runtime, "containerd")
+        self.assertEqual(container.container_id, container_id)
+        self.assertEqual(container.orchestrator, "kubernetes")
+        self.assertEqual(container.containerd_namespace, "k8s.io")
+
+    def test_read_process_detail_enriches_k8s_container_from_crictl(self) -> None:
+        container_id = "c" * 64
+        crictl_json = """
+        {
+          "status": {
+            "id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "metadata": {"name": "trainer"},
+            "image": {"image": "registry.local/train:latest"},
+            "imageRef": "sha256:image-ref",
+            "labels": {
+              "io.kubernetes.pod.namespace": "demo",
+              "io.kubernetes.pod.name": "train-pod",
+              "io.kubernetes.pod.uid": "pod-uid",
+              "io.kubernetes.container.name": "worker",
+              "io.kubernetes.sandbox.id": "sandbox-id"
+            }
+          }
+        }
+        """
+
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            self.assertEqual(args[:3], ["crictl", "inspect", "--output"])
+            self.assertLessEqual(timeout, collectors.CONTAINER_INSPECT_TIMEOUT_SECONDS)
+            return CommandResult(args=args, returncode=0, stdout=crictl_json, stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc_root = Path(temp_dir)
+            self.create_proc_detail_dir(
+                proc_root,
+                cgroup_text=f"0::/kubepods.slice/cri-containerd-{container_id}.scope\n",
+            )
+            with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+                detail = collectors.read_process_detail(42, proc_root)
+
+        self.assertEqual(detail.error, "")
+        self.assertIsNotNone(detail.container)
+        self.assertEqual(detail.container.source, "crictl")
+        self.assertEqual(detail.container.image, "registry.local/train:latest")
+        self.assertEqual(detail.container.image_id, "sha256:image-ref")
+        self.assertEqual(detail.container.k8s_namespace, "demo")
+        self.assertEqual(detail.container.k8s_pod_name, "train-pod")
+        self.assertEqual(detail.container.k8s_container_name, "worker")
+        self.assertEqual(detail.container.k8s_sandbox_id, "sandbox-id")
+
+    def test_read_process_detail_enriches_docker_container_from_docker_inspect(self) -> None:
+        container_id = "d" * 64
+        docker_json = """
+        [
+          {
+            "Id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "Name": "/trainer",
+            "Image": "sha256:docker-image",
+            "Config": {
+              "Image": "demo/train:latest",
+              "Labels": {}
+            }
+          }
+        ]
+        """
+
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            self.assertEqual(args[0], "docker")
+            return CommandResult(args=args, returncode=0, stdout=docker_json, stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc_root = Path(temp_dir)
+            self.create_proc_detail_dir(
+                proc_root,
+                cgroup_text=f"0::/system.slice/docker-{container_id}.scope\n",
+            )
+            with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+                detail = collectors.read_process_detail(42, proc_root)
+
+        self.assertEqual(detail.error, "")
+        self.assertIsNotNone(detail.container)
+        self.assertEqual(detail.container.runtime, "docker")
+        self.assertEqual(detail.container.source, "docker")
+        self.assertEqual(detail.container.name, "trainer")
+        self.assertEqual(detail.container.image, "demo/train:latest")
+        self.assertEqual(detail.container.image_id, "sha256:docker-image")
+
+    def test_container_inspect_errors_keep_proc_container_detail(self) -> None:
+        container_id = "e" * 64
+        calls: list[list[str]] = []
+
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            calls.append(args)
+            if args[0] == "crictl":
+                return CommandResult(args=args, returncode=0, stdout="not json", stderr="")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="permission denied")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc_root = Path(temp_dir)
+            self.create_proc_detail_dir(proc_root, cgroup_text=f"0::/containers/{container_id}\n")
+            with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+                detail = collectors.read_process_detail(42, proc_root)
+
+        self.assertEqual(detail.error, "")
+        self.assertIsNotNone(detail.container)
+        self.assertEqual(detail.container.container_id, container_id)
+        self.assertEqual(detail.container.runtime, "unknown")
+        self.assertEqual(detail.container.source, "proc")
+        self.assertEqual([call[0] for call in calls], ["crictl", "docker"])
+
+    def test_read_process_detail_reads_k8s_namespace_from_serviceaccount(self) -> None:
+        container_id = "f" * 64
+
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            return CommandResult(args=args, returncode=1, stdout="", stderr="permission denied")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            proc_root = Path(temp_dir)
+            proc_dir = self.create_proc_detail_dir(
+                proc_root,
+                cgroup_text=f"0::/kubepods.slice/cri-containerd-{container_id}.scope\n",
+            )
+            self.write_serviceaccount_namespace(proc_dir, "training")
+            with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+                detail = collectors.read_process_detail(42, proc_root)
+
+        self.assertEqual(detail.error, "")
+        self.assertIsNotNone(detail.container)
+        self.assertEqual(detail.container.container_id, container_id)
+        self.assertEqual(detail.container.k8s_namespace, "training")
+        self.assertEqual(detail.container.orchestrator, "kubernetes")
+        self.assertEqual(detail.container.source, "proc")
 
     def test_read_process_detail_returns_partial_data_on_missing_links(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
