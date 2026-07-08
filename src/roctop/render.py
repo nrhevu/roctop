@@ -4,7 +4,7 @@ import math
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 from rich import box
 from rich.console import Console, ConsoleOptions, Group, RenderResult
@@ -920,14 +920,8 @@ def focused_gpu_metrics_rows(
     processes: Sequence[ProcessInfo] = (),
     driver_version: str = "",
 ) -> list[tuple[str, Text]]:
-    gpu_processes = [proc for proc in processes if proc.gpu_index == gpu.index]
-    top_gpu_process = max(gpu_processes, key=lambda proc: proc.gpu_memory_bytes, default=None)
     memory_free_bytes = max(0, gpu.memory_total_bytes - gpu.memory_used_bytes)
     memory_free_percent = max(0.0, 100.0 - gpu.memory_percent)
-    process_gpu_memory_bytes = sum(proc.gpu_memory_bytes for proc in gpu_processes)
-    process_gpu_memory_percent = sum(proc.gpu_memory_percent for proc in gpu_processes)
-    process_cpu_percent = sum_optional_percent(proc.cpu_percent for proc in gpu_processes)
-    process_host_mem_percent = sum_optional_percent(proc.host_mem_percent for proc in gpu_processes)
     return [
         ("GPU", Text(str(gpu.index), style=f"bold {DRACULA_FG}")),
         ("Model", gpu_info_text(gpu.gpu_type)),
@@ -957,28 +951,6 @@ def focused_gpu_metrics_rows(
             ),
         ),
         ("Fan RPM", gpu_info_text(f"{gpu.fan_rpm}RPM" if gpu.fan_rpm is not None else "")),
-        ("Processes", Text(str(len(gpu_processes)), style=DRACULA_FG)),
-        ("Top Proc Cmd", gpu_info_text(process_command(top_gpu_process) if top_gpu_process is not None else "")),
-        ("Top Proc User", gpu_info_text(top_gpu_process.user if top_gpu_process is not None else "")),
-        ("Top Proc PID", Text("-" if top_gpu_process is None else str(top_gpu_process.pid), style=DRACULA_FG)),
-        (
-            "Top Proc Mem",
-            gpu_info_text(
-                top_process_gpu_memory(top_gpu_process),
-                percent_style(top_gpu_process.gpu_memory_percent if top_gpu_process is not None else None),
-            ),
-        ),
-        (
-            "Proc GPU Mem",
-            gpu_info_text(format_bytes_mib(process_gpu_memory_bytes), percent_style(process_gpu_memory_percent)),
-        ),
-        (
-            "Proc GPU Mem %",
-            gpu_info_text(percent_text(process_gpu_memory_percent, digits=1), percent_style(process_gpu_memory_percent)),
-        ),
-        ("Top Proc Time", gpu_info_text(top_gpu_process.elapsed if top_gpu_process is not None else "")),
-        ("Proc CPU", optional_percent_text(process_cpu_percent)),
-        ("Proc Host MEM", optional_percent_text(process_host_mem_percent)),
         ("Driver", gpu_info_text(driver_version)),
         ("PCIe", gpu_info_text(gpu.pcie_bus)),
         ("PCIe Link", gpu_info_text(pcie_link_summary(gpu))),
@@ -992,29 +964,6 @@ def focused_gpu_metrics_rows(
         ("Unique ID", gpu_info_text(gpu.unique_id)),
         ("SKU", gpu_info_text(gpu.sku)),
     ]
-
-
-def sum_optional_percent(values: Iterable[float | None]) -> float | None:
-    found = False
-    total = 0.0
-    for value in values:
-        if value is None:
-            continue
-        found = True
-        total += value
-    return total if found else None
-
-
-def optional_percent_text(value: float | None) -> Text:
-    if value is None:
-        return Text("N/A", style=DRACULA_DIM)
-    return Text(percent_text(value, digits=1), style=percent_style(value))
-
-
-def top_process_gpu_memory(proc: ProcessInfo | None) -> str:
-    if proc is None:
-        return ""
-    return f"{format_bytes_mib(proc.gpu_memory_bytes)} ({percent_text(proc.gpu_memory_percent, digits=1)})"
 
 
 def pcie_link_summary(gpu: GpuInfo) -> str:

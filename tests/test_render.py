@@ -336,17 +336,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Memory Free %:", output)
         self.assertIn("Utilization:", output)
         self.assertIn("88.0%", output)
-        self.assertIn("Processes: 2", output)
-        self.assertIn("Proc GPU Mem:", output)
-        self.assertIn("1.50GiB", output)
-        self.assertIn("Proc GPU Mem %: 37.5%", output)
-        self.assertIn("Proc CPU: 23.0%", output)
-        self.assertIn("Proc Host MEM: 4.0%", output)
-        self.assertIn("Top Proc PID: 457", output)
-        self.assertIn("Top Proc User: worker", output)
-        self.assertIn("Top Proc Mem: 1.00GiB (25.0%)", output)
-        self.assertIn("Top Proc Time: 04:05", output)
-        self.assertIn("Top Proc Cmd: worker --rank 1", output)
+        self.assertNotIn("Processes:", output)
+        self.assertNotIn("Proc GPU Mem:", output)
+        self.assertNotIn("Proc GPU Mem %:", output)
+        self.assertNotIn("Proc CPU:", output)
+        self.assertNotIn("Proc Host MEM:", output)
+        self.assertNotIn("Top Proc", output)
         focused_metric_lines = [
             line
             for line in output.splitlines()
@@ -356,27 +351,20 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(
             any(
                 "GPU: 1" in line
-                and "Processes: 2" in line
                 and "Temperature:" in line
-                and "Proc CPU:" in line
-                and "Name:" in line
+                and "Driver:" in line
+                and "Architecture:" in line
                 for line in focused_metric_lines
             )
         )
-        first_metric_line = next(
-            line for line in focused_metric_lines if "GPU: 1" in line and "Processes: 2" in line
-        )
-        self.assertLess(first_metric_line.index("Temperature:"), first_metric_line.index("Processes: 2"))
+        first_metric_line = next(line for line in focused_metric_lines if "GPU: 1" in line)
+        self.assertLess(first_metric_line.index("Temperature:"), first_metric_line.index("Driver:"))
         model_line = next(
             line
-            for line in output.splitlines()
-            if "Model: AMD Instinct MI350X" in line and "Power:" in line and "Top Proc Cmd:" in line
+            for line in focused_metric_lines
+            if "Model: AMD Instinct MI350X" in line and "Power:" in line and "PCIe:" in line
         )
-        self.assertLess(model_line.index("Power:"), model_line.index("Top Proc Cmd:"))
-        self.assertGreaterEqual(
-            model_line.index("Top Proc Cmd:") - (model_line.index("Model:") + len("Model: AMD Instinct MI350X")),
-            8,
-        )
+        self.assertLess(model_line.index("Power:"), model_line.index("PCIe:"))
         self.assertNotIn("AMD GPU 0", output)
         self.assertNotIn("guid-0", output)
         self.assertIn("GPU 1", output)
