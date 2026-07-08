@@ -818,6 +818,31 @@ class RenderTests(unittest.TestCase):
         self.assertIn("38;2;255;85;85", output)
         self.assertIn("100%", output)
 
+    def test_focused_gpu_memory_free_uses_free_capacity_style(self) -> None:
+        high_free_metrics = dict(
+            render.focused_gpu_metrics_rows(
+                GpuInfo(
+                    index=0,
+                    memory_used_bytes=1 * 1024 * 1024 * 1024,
+                    memory_total_bytes=10 * 1024 * 1024 * 1024,
+                )
+            )
+        )
+        low_free_metrics = dict(
+            render.focused_gpu_metrics_rows(
+                GpuInfo(
+                    index=0,
+                    memory_used_bytes=9 * 1024 * 1024 * 1024,
+                    memory_total_bytes=10 * 1024 * 1024 * 1024,
+                )
+            )
+        )
+
+        self.assertEqual(high_free_metrics["Memory Free"].style, render.DRACULA_GREEN)
+        self.assertEqual(high_free_metrics["Memory Free %"].style, render.DRACULA_GREEN)
+        self.assertEqual(low_free_metrics["Memory Free"].style, f"bold {render.DRACULA_RED}")
+        self.assertEqual(low_free_metrics["Memory Free %"].style, f"bold {render.DRACULA_RED}")
+
     def test_percent_bar_expands_to_available_width(self) -> None:
         narrow_console = Console(width=40, record=True, file=StringIO())
         narrow_console.print(bar_with_percent(50, percent_style(50)))

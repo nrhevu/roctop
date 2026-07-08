@@ -929,8 +929,8 @@ def focused_gpu_metrics_rows(
         ("Memory Usage", gpu_info_text(percent_text(gpu.memory_percent, digits=1), percent_style(gpu.memory_percent))),
         ("Memory Used", gpu_info_text(format_bytes_mib(gpu.memory_used_bytes), percent_style(gpu.memory_percent))),
         ("Memory Total", gpu_info_text(format_bytes_mib(gpu.memory_total_bytes))),
-        ("Memory Free", gpu_info_text(format_bytes_mib(memory_free_bytes), percent_style(memory_free_percent))),
-        ("Memory Free %", gpu_info_text(percent_text(memory_free_percent, digits=1), percent_style(memory_free_percent))),
+        ("Memory Free", gpu_info_text(format_bytes_mib(memory_free_bytes), free_percent_style(memory_free_percent))),
+        ("Memory Free %", gpu_info_text(percent_text(memory_free_percent, digits=1), free_percent_style(memory_free_percent))),
         (
             "Temperature",
             gpu_info_text(
@@ -2124,6 +2124,10 @@ def percent_style(percent: float | int | None) -> str:
     if value >= 50:
         return DRACULA_YELLOW
     return DRACULA_GREEN
+
+
+def free_percent_style(percent: float | int | None) -> str:
+    return percent_style(100.0 - clamp_percent(percent))
 
 
 def temp_style(temp_c: float | None) -> str:
