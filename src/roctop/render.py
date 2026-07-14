@@ -2127,16 +2127,8 @@ def render_warnings(warnings: list[str]) -> Panel:
 
 
 def ui_warnings(warnings: list[str]) -> list[str]:
-    hidden_fragments = (
-        "_amdgpu_device_initialize: amdgpu_get_auth",
-        "User is missing the following required groups",
-        "Unable to open queues directory",
-    )
-    return [
-        warning
-        for warning in warnings
-        if not any(fragment in warning for fragment in hidden_fragments)
-    ]
+    # Keep raw warnings on Snapshot for JSON/debugging; keep terminal UI quiet.
+    return []
 
 
 def bar_with_percent(percent: float, style: str, digits: int = 0) -> Table:

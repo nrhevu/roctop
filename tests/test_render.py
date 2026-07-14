@@ -155,6 +155,19 @@ class RenderTests(unittest.TestCase):
         self.assertIn("%GPU-MEM", output)
         self.assertNotIn("Avg %CPU", output)
 
+    def test_snapshot_hides_warning_panel(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0)],
+            warnings=["driver warning"],
+        )
+        console = Console(width=120, record=True, file=StringIO())
+        console.print(render_snapshot(snapshot, terminal_height=25, terminal_width=120))
+
+        output = console.export_text()
+        self.assertNotIn("Warnings", output)
+        self.assertNotIn("driver warning", output)
+
     def test_snapshot_renders_history_graphs_between_tables(self) -> None:
         snapshot = Snapshot(
             timestamp=datetime(2026, 6, 22, 12, 0, 0),
