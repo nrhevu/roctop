@@ -9,7 +9,7 @@ but with GPU details that are easier to scan than raw `rocm-smi` output.
 
 ## Demo
 
-![roctop demo](https://raw.githubusercontent.com/nrhevu/roctop/v0.4.4/docs/demo.svg)
+![roctop demo](https://raw.githubusercontent.com/nrhevu/roctop/v1.0.0/docs/demo.svg)
 
 The demo uses synthetic data. Process names, users, PIDs, paths, and metrics are
 placeholders.
