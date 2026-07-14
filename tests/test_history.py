@@ -119,6 +119,8 @@ class HistoryTests(unittest.TestCase):
     def test_malformed_system_metrics_return_none(self) -> None:
         self.assertIsNone(parse_cpu_times("not cpu data\n"))
         self.assertIsNone(parse_mem_percent("MemTotal:       0 kB\n"))
+        self.assertIsNone(parse_mem_percent("MemTotal:      -1 kB\nMemAvailable: 0 kB\n"))
+        self.assertIsNone(parse_mem_percent("MemTotal:    1000 kB\nMemAvailable: -1 kB\n"))
         history = MetricsHistory(stat_path="/missing/stat", meminfo_path="/missing/meminfo")
         sample = history.add_snapshot(Snapshot(timestamp=datetime(2026, 6, 22, 12, 0, 0)))
         self.assertIsNone(sample.avg_cpu_percent)

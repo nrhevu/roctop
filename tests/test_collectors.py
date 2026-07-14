@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import threading
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -70,6 +71,18 @@ class CollectorTests(unittest.TestCase):
         with patch("subprocess.run", side_effect=PermissionError("permission denied")):
             with self.assertRaises(CollectionError):
                 run_command(["rocm-smi"], timeout=1)
+
+    def test_run_command_replaces_invalid_utf8_output(self) -> None:
+        result = run_command(
+            [
+                sys.executable,
+                "-c",
+                "import os; os.write(1, bytes([255]))",
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "\ufffd")
 
     def test_collect_snapshot_wraps_invalid_rocm_json(self) -> None:
         def fake_run_command(args, **kwargs) -> CommandResult:
@@ -779,6 +792,20 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].memory_total_bytes, int(287.7 * 1024**3))
         self.assertEqual(gpus[0].utilization_percent, 12.5)
 
+    def test_parse_amd_smi_gpu_json_skips_invalid_gpu_indices(self) -> None:
+        gpus = parse_amd_smi_gpu_json(
+            [
+                {"gpu": float("nan"), "market_name": "invalid-nan"},
+                {"gpu": float("inf"), "market_name": "invalid-infinity"},
+                {"gpu": -1, "market_name": "invalid-negative"},
+                {"gpu": 1.5, "market_name": "invalid-fraction"},
+                {"gpu": {"value": 2}, "market_name": "invalid-object"},
+                {"gpu": 2, "market_name": "valid"},
+            ]
+        )
+
+        self.assertEqual([(gpu.index, gpu.name) for gpu in gpus], [(2, "valid")])
+
     def test_enrich_gpus_with_sysfs_pcie_reads_link_status(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             devices_path = Path(temp_dir)
@@ -868,6 +895,38 @@ class CollectorTests(unittest.TestCase):
 
         self.assertIsNone(gpus[0].temperature_c)
         self.assertIsNone(gpus[0].power_w)
+
+    def test_gpu_parsers_reject_overflowing_numeric_fields(self) -> None:
+        huge_number = "9" * 400
+        rocm_gpus, _, _ = parse_rocm_smi_json(
+            {
+                f"card{'9' * 5000}": {},
+                "card0": {
+                    "Temperature (Sensor junction) (C)": huge_number,
+                    "Fan Speed (RPM)": huge_number,
+                    "sclk clock speed:": huge_number,
+                },
+            }
+        )
+        amd_gpus = parse_amd_smi_gpu_json(
+            [
+                {
+                    "gpu": 0,
+                    "market_name": "AMD GPU",
+                    "max_power": huge_number,
+                    "fan_rpm": huge_number,
+                    "current_gfxclk": huge_number,
+                }
+            ]
+        )
+
+        self.assertEqual(len(rocm_gpus), 1)
+        self.assertIsNone(rocm_gpus[0].temperature_c)
+        self.assertIsNone(rocm_gpus[0].fan_rpm)
+        self.assertIsNone(rocm_gpus[0].sclk_mhz)
+        self.assertIsNone(amd_gpus[0].max_power_w)
+        self.assertIsNone(amd_gpus[0].fan_rpm)
+        self.assertIsNone(amd_gpus[0].sclk_mhz)
 
     def test_parse_rocm_smi_json_normalizes_reported_model_name(self) -> None:
         gpus, _, _ = parse_rocm_smi_json(
@@ -997,6 +1056,8 @@ class CollectorTests(unittest.TestCase):
     def test_parse_memory_bytes_field_rejects_non_finite_values(self) -> None:
         self.assertEqual(parse_memory_bytes_field({"value": "NaN", "unit": "B"}), 0)
         self.assertEqual(parse_memory_bytes_field({"value": "Infinity", "unit": "B"}), 0)
+        self.assertEqual(parse_memory_bytes_field({"value": "1e308", "unit": "GiB"}), 0)
+        self.assertEqual(parse_memory_bytes_field({"value": "-1e308", "unit": "GiB"}), 0)
 
     def test_parse_amd_smi_process_json_skips_non_finite_memory(self) -> None:
         raw = [
@@ -1040,6 +1101,31 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(processes), 1)
         self.assertEqual(processes[0].pid, 456)
 
+    def test_process_parsers_skip_non_positive_pids(self) -> None:
+        _gpus, rocm_processes, _driver = parse_rocm_smi_json(
+            {
+                "system": {
+                    "PID0": "kernel, 0, 1024",
+                    "PID-1": "invalid, 0, 1024",
+                }
+            }
+        )
+        amd_processes = parse_amd_smi_process_json(
+            [
+                {
+                    "gpu": 0,
+                    "process_list": [
+                        {"process_info": {"pid": 0, "mem_usage": 1024}},
+                        {"process_info": {"pid": -1, "mem_usage": 1024}},
+                    ],
+                }
+            ],
+            [GpuInfo(index=0, memory_total_bytes=4096)],
+        )
+
+        self.assertEqual(rocm_processes, [])
+        self.assertEqual(amd_processes, [])
+
     def test_merge_process_sources_fills_name(self) -> None:
         primary = [ProcessInfo(gpu_index=4, pid=42, gpu_memory_bytes=100)]
         fallback = [
@@ -1051,6 +1137,21 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(merged[0].gpu_memory_bytes, 100)
         self.assertEqual(merged[1].pid, 43)
         self.assertEqual(merged[1].command, "server")
+
+    def test_merge_process_sources_preserves_same_pid_on_multiple_gpus(self) -> None:
+        primary = [ProcessInfo(gpu_index=0, pid=42, gpu_memory_bytes=100)]
+        fallback = [
+            ProcessInfo(gpu_index=0, pid=42, name="worker", gpu_memory_bytes=90),
+            ProcessInfo(gpu_index=1, pid=42, name="worker", gpu_memory_bytes=80),
+        ]
+
+        merged = merge_process_sources(primary, fallback)
+
+        self.assertEqual(
+            [(proc.pid, proc.gpu_index, proc.gpu_memory_bytes) for proc in merged],
+            [(42, 0, 100), (42, 1, 80)],
+        )
+        self.assertEqual(merged[0].name, "worker")
 
     def test_format_bytes_mib(self) -> None:
         self.assertEqual(format_bytes_mib(0), "0MiB")

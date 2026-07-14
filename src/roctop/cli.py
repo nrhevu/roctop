@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import signal
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable
+from typing import Any, Callable, Iterator
 
 from rich.console import Console
 from rich.live import Live
@@ -39,6 +41,7 @@ from .render import GRAPH_COLUMNS_PER_CELL, GRAPH_HISTORY_SECONDS, GPU_GRAPH_WID
 
 
 KEY_POLL_SECONDS = 0.05
+MAX_INTERVAL_SECONDS = threading.TIMEOUT_MAX
 COLLECTOR_STOP_JOIN_SECONDS = 0.05
 GRAPH_FRAME_SECONDS = 1.0
 GRAPH_HISTORY_BUCKETS = GRAPH_HISTORY_SECONDS + 1
@@ -50,6 +53,7 @@ GRAPH_METRIC_FIELDS = (
     "avg_gpu_percent",
     "avg_gpu_mem_percent",
 )
+LIVE_TERMINATION_SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT)
 
 
 @dataclass(slots=True)
@@ -143,7 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval",
         type=float,
         default=1.0,
-        help="Refresh interval in seconds for the live view. Default: 1.0",
+        help=(
+            "Refresh interval in seconds for the live view. "
+            f"Range: {KEY_POLL_SECONDS:g}-{MAX_INTERVAL_SECONDS:.0f}. Default: 1.0"
+        ),
     )
     parser.add_argument("--once", action="store_true", help="Render one snapshot and exit.")
     parser.add_argument("--json", action="store_true", help="Print one normalized JSON snapshot and exit.")
@@ -154,10 +161,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     console = Console(color_system="truecolor")
-    error_console = Console(stderr=True, color_system="truecolor")
+    error_console = Console(stderr=True)
 
-    if args.interval <= 0:
-        error_console.print("[red]--interval must be greater than 0[/red]")
+    if (
+        not math.isfinite(args.interval)
+        or args.interval < KEY_POLL_SECONDS
+        or args.interval > MAX_INTERVAL_SECONDS
+    ):
+        error_console.print(
+            "[red]--interval must be a finite number between "
+            f"{KEY_POLL_SECONDS:g} and {MAX_INTERVAL_SECONDS:.0f} seconds[/red]"
+        )
         return 2
 
     try:
@@ -181,8 +195,19 @@ def main(argv: list[str] | None = None) -> int:
     except (KeyboardInterrupt, CommandInterrupted):
         return 0
     except CollectionError as exc:
-        error_console.print(f"[red]{exc}[/red]")
+        error_console.print(safe_terminal_text(str(exc)), style="red", markup=False, highlight=False)
         return 1
+
+
+def safe_terminal_text(value: str) -> str:
+    safe_chars: list[str] = []
+    for char in value:
+        codepoint = ord(char)
+        if codepoint < 0x20 or 0x7F <= codepoint <= 0x9F:
+            safe_chars.append(f"\\x{codepoint:02x}")
+        else:
+            safe_chars.append(char)
+    return "".join(safe_chars)
 
 
 def run_live(console: Console, interval: float) -> int:
@@ -195,6 +220,7 @@ def run_live(console: Console, interval: float) -> int:
     display_time = datetime.now()
     graph_frame = capture_graph_frame(history, display_time)
     with (
+        live_termination_signal_handlers(),
         TerminalKeyboard() as keyboard,
         Live(
             render_live_snapshot(
@@ -228,6 +254,30 @@ def run_live(console: Console, interval: float) -> int:
         finally:
             collector.stop()
     return 0
+
+
+@contextmanager
+def live_termination_signal_handlers() -> Iterator[None]:
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    previous_handlers: dict[signal.Signals, Any] = {}
+
+    def request_exit(signum: int, _frame: Any) -> None:
+        raise SystemExit(128 + signum)
+
+    try:
+        for signum in LIVE_TERMINATION_SIGNALS:
+            previous_handler = signal.getsignal(signum)
+            if previous_handler != signal.SIG_DFL:
+                continue
+            previous_handlers[signum] = previous_handler
+            signal.signal(signum, request_exit)
+        yield
+    finally:
+        for signum, previous_handler in previous_handlers.items():
+            signal.signal(signum, previous_handler)
 
 
 def poll_live_until_quit(
@@ -416,6 +466,7 @@ def handle_key_batch(
 ) -> tuple[bool, list[ProcessInfo]]:
     quit_requested = False
     gpu_indices = snapshot_gpu_indices(snapshot)
+    all_processes = [*snapshot.processes, *snapshot.process_ancestors]
     processes = process_state.display_processes(snapshot.processes, snapshot.process_ancestors)
     process_state.sync(processes, adjust_scroll=False)
     processes_dirty = False
@@ -436,9 +487,11 @@ def handle_key_batch(
                 processes,
                 processes_synced=True,
                 gpu_indices=gpu_indices,
-                all_processes=snapshot.processes,
+                all_processes=all_processes,
             )
             quit_requested = quit_requested or result.quit
+            if result.quit:
+                break
             if process_view_key(process_state) != view_before:
                 processes_dirty = True
         if processes_dirty:
@@ -790,6 +843,7 @@ def graph_sample_for_second(
     gpu_metrics: list[GpuMetricSample] = []
     for gpu_index in gpu_indices:
         previous_gpu_metric = previous_gpu_metrics.get(gpu_index)
+        utilization_percent: float | None
         if gpu_index in gpu_util_counts:
             utilization_percent = gpu_util_totals[gpu_index] / gpu_util_counts[gpu_index]
         elif previous_gpu_metric is not None:
@@ -797,6 +851,7 @@ def graph_sample_for_second(
         else:
             utilization_percent = None
 
+        memory_percent: float | None
         if gpu_index in gpu_mem_counts:
             memory_percent = gpu_mem_totals[gpu_index] / gpu_mem_counts[gpu_index]
         elif previous_gpu_metric is not None:

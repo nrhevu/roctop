@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import termios
 import unittest
 
 from unittest.mock import patch
@@ -67,6 +68,25 @@ class InteractionTests(unittest.TestCase):
             self.assertEqual(keyboard.read_keys(), [])
             self.assertEqual(keyboard.read_keys(), [KEY_UP])
 
+    def test_terminal_keyboard_decodes_utf8_key_split_across_reads(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+        encoded = "é".encode()
+
+        with (
+            patch("roctop.interaction.select.select", return_value=([1], [], [])),
+            patch("roctop.interaction.os.read", side_effect=[encoded[:1], encoded[1:]]),
+        ):
+            self.assertEqual(keyboard.read_keys(), [])
+            self.assertEqual(keyboard.read_keys(), ["é"])
+
+    def test_parse_keys_ignores_unsupported_terminal_escape_sequences(self) -> None:
+        self.assertEqual(parse_keys(b"\x1b[15~\x1b[1;5A\x1bOP"), [])
+
+    def test_parse_keys_maps_application_cursor_arrow_sequences(self) -> None:
+        self.assertEqual(parse_keys(b"\x1bOA\x1bOB\x1bOC\x1bOD"), [KEY_UP, KEY_DOWN, KEY_RIGHT, KEY_LEFT])
+
     def test_terminal_keyboard_flushes_standalone_escape_after_timeout(self) -> None:
         keyboard = TerminalKeyboard()
         keyboard.enabled = True
@@ -115,6 +135,21 @@ class InteractionTests(unittest.TestCase):
 
         self.assertFalse(keyboard.enabled)
         self.assertIsNone(keyboard.fd)
+
+    def test_terminal_keyboard_restores_terminal_after_input_error_disables_it(self) -> None:
+        keyboard = TerminalKeyboard()
+        keyboard.enabled = True
+        keyboard.fd = 1
+        keyboard.original_attrs = ["saved"]
+
+        with (
+            patch("roctop.interaction.select.select", side_effect=OSError("bad fd")),
+            patch("roctop.interaction.termios.tcsetattr") as restore_terminal,
+        ):
+            self.assertEqual(keyboard.read_keys(), [])
+            keyboard.__exit__(None, None, None)
+
+        restore_terminal.assert_called_once_with(1, termios.TCSANOW, ["saved"])
 
     def test_cursor_movement_and_page_keys_clamp(self) -> None:
         processes = [proc(pid) for pid in range(100, 106)]
@@ -304,6 +339,18 @@ class InteractionTests(unittest.TestCase):
         display = state.display_processes(processes, ancestors)
 
         self.assertEqual([row.pid for row in display], [10, 11, 12])
+
+    def test_tree_mode_handles_process_chains_deeper_than_python_recursion_limit(self) -> None:
+        processes = [
+            proc(pid, ppid=pid - 1 if pid > 1 else None)
+            for pid in range(1, 1501)
+        ]
+        state = ProcessViewState(tree_mode=True, viewport_rows=4)
+
+        display = state.display_processes(processes)
+
+        self.assertEqual(len(display), 1500)
+        self.assertEqual([row.pid for row in display], list(range(1, 1501)))
 
     def test_tree_filter_keeps_only_matching_rows_as_roots(self) -> None:
         processes = [
@@ -498,6 +545,28 @@ class InteractionTests(unittest.TestCase):
 
         state.handle_key(KEY_UP, processes, processes_synced=True)
         self.assertEqual(state.help_scroll_offset, 0)
+
+    def test_help_mode_uses_rendered_row_count_and_visible_height(self) -> None:
+        processes = [proc(100)]
+        state = ProcessViewState(
+            mode=MODE_HELP,
+            help_render_row_count=51,
+            help_visible_rows=10,
+        )
+
+        state.handle_key("l", processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 10)
+
+        state.help_scroll_offset = 40
+        state.handle_key(KEY_DOWN, processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 41)
+        self.assertEqual(max_help_scroll_offset(state), 41)
+
+        state.handle_key(KEY_RIGHT, processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 41)
+
+        state.handle_key("h", processes, processes_synced=True)
+        self.assertEqual(state.help_scroll_offset, 31)
 
     def test_help_mode_ignores_non_help_controls(self) -> None:
         processes = [proc(100), proc(101)]

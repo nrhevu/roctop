@@ -140,7 +140,7 @@ def parse_mem_percent(text: str) -> float | None:
 
     total = values.get("MemTotal")
     available = values.get("MemAvailable")
-    if not total or available is None:
+    if total is None or total <= 0 or available is None or available < 0:
         return None
     return clamp_percent((total - available) / total * 100.0)
 

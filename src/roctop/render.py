@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Callable, Sequence
 
 from rich import box
-from rich.console import Console, ConsoleOptions, Group, RenderResult
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.measure import Measurement
 from rich.panel import Panel
 from rich.segment import Segment
@@ -18,6 +18,7 @@ from . import __version__
 from .formatting import clamp_percent, format_bytes_mib, percent_text
 from .history import MetricSample, MetricsHistory
 from .interaction import (
+    HELP_VISIBLE_ROWS,
     KILL_CONFIRM_LABELS,
     KILL_CONFIRM_OPTIONS,
     MODE_FILTER,
@@ -86,6 +87,18 @@ BRAILLE_DOTS_BY_COLUMN = (
 )
 
 
+def safe_terminal_text(value: object, *, allow_newlines: bool = False) -> str:
+    text = "" if value is None else str(value)
+    if allow_newlines:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(
+        char
+        if (allow_newlines and char == "\n") or not (ord(char) < 32 or 127 <= ord(char) <= 159)
+        else " "
+        for char in text
+    )
+
+
 @dataclass(slots=True)
 class ProcessRenderRow:
     process: ProcessInfo
@@ -127,8 +140,8 @@ class ProgressText:
 
 @dataclass(frozen=True, slots=True)
 class PopupOverlay:
-    base: object
-    popup_factory: Callable[[int], object]
+    base: RenderableType
+    popup_factory: Callable[[int], RenderableType]
     terminal_height: int | None
     terminal_width: int | None
 
@@ -177,13 +190,18 @@ class PopupOverlay:
 
 
 def HelpOverlay(
-    base: object,
+    base: RenderableType,
     process_state: ProcessViewState,
     terminal_height: int | None,
     terminal_width: int | None,
     gpus: Sequence[GpuInfo] | None = None,
 ) -> PopupOverlay:
-    return PopupOverlay(base, lambda width: render_help_popup(process_state, width, gpus), terminal_height, terminal_width)
+    return PopupOverlay(
+        base,
+        lambda width: render_help_popup(process_state, width, gpus, terminal_height),
+        terminal_height,
+        terminal_width,
+    )
 
 
 def render_snapshot(
@@ -198,8 +216,9 @@ def render_snapshot(
     history_samples: Sequence[MetricSample] | None = None,
     graph_time: datetime | None = None,
     graph_time_offset_seconds: int = 0,
-) -> Group | PopupOverlay:
+) -> RenderableType:
     with profile_span("render"):
+        base: RenderableType
         if process_state is not None and process_state.gpu_graphs_visible and history is not None:
             base = render_gpu_metrics_graphs(
                 snapshot.gpus,
@@ -230,6 +249,7 @@ def render_snapshot(
             process_ancestors=snapshot.process_ancestors,
             elapsed_offset_seconds=process_elapsed_offset_seconds(snapshot.timestamp, display_time),
         )
+        parts: list[RenderableType]
         if process_state is not None and process_state.process_zoomed:
             parts = [process_table]
         else:
@@ -342,13 +362,13 @@ def render_header(
     title = Text("roctop", style=f"bold {DRACULA_CYAN}")
     if snapshot.node_name:
         title.append(" @ ", style=DRACULA_DIM)
-        title.append(snapshot.node_name, style=f"bold {DRACULA_GREEN}")
+        title.append(safe_terminal_text(snapshot.node_name), style=f"bold {DRACULA_GREEN}")
     timestamp = format_header_timestamp(display_time or snapshot.timestamp, show_subsecond_time)
     details = Text()
     details.append(timestamp, style=DRACULA_FG)
     if snapshot.driver_version:
         details.append("   ROCm Driver: ", style=DRACULA_DIM)
-        details.append(snapshot.driver_version, style=DRACULA_GREEN)
+        details.append(safe_terminal_text(snapshot.driver_version), style=DRACULA_GREEN)
     gpu_models = summarize_gpu_models(snapshot.gpus)
     if gpu_models:
         details.append("   Model: ", style=DRACULA_DIM)
@@ -443,12 +463,23 @@ def render_help_popup(
     process_state: ProcessViewState,
     terminal_width: int | None = None,
     gpus: Sequence[GpuInfo] | None = None,
+    terminal_height: int | None = None,
 ) -> Panel:
     available_width = terminal_width or 88
     panel_width = min(128, max(1, available_width - 4))
+    body_lines = help_popup_body(gpus, panel_width).split("\n", allow_blank=True)
+    visible_rows = HELP_VISIBLE_ROWS if terminal_height is None else max(1, terminal_height - 2)
+    process_state.help_render_row_count = len(body_lines)
+    process_state.help_visible_rows = visible_rows
+    max_offset = max(0, len(body_lines) - visible_rows)
+    start = min(max(0, process_state.help_scroll_offset), max_offset)
+    process_state.help_scroll_offset = start
+    visible_body = Text("\n", no_wrap=True, overflow="crop").join(
+        body_lines[start : start + visible_rows]
+    )
 
     return Panel(
-        help_popup_body(gpus, panel_width),
+        visible_body,
         border_style=DRACULA_CYAN,
         box=box.SQUARE,
         width=panel_width,
@@ -660,7 +691,10 @@ def render_process_info_popup(
     table.add_column("VALUE", style=DRACULA_FG, no_wrap=True, overflow="crop", width=value_width)
     visible_rows = rows[start:end]
     for label, value in visible_rows:
-        table.add_row(label, value or "-")
+        table.add_row(
+            Text(safe_terminal_text(label)),
+            Text(safe_terminal_text(value, allow_newlines=True) or "-"),
+        )
     for _ in range(PROCESS_INFO_VISIBLE_ROWS - len(visible_rows)):
         table.add_row("", "")
     table.caption = "j/k or Up/Down: scroll   h/l or Left/Right: page   i/Esc: close"
@@ -700,6 +734,7 @@ def process_info_visual_rows(rows: list[tuple[str, str]], value_width: int) -> l
 
 
 def wrap_process_info_value(value: str, width: int) -> list[str]:
+    value = safe_terminal_text(value, allow_newlines=True)
     lines: list[str] = []
     for raw_line in value.splitlines() or ["-"]:
         lines.extend(
@@ -869,9 +904,9 @@ def render_gpu_table(
         power = f"{gpu.power_w:.0f}W" if gpu.power_w is not None else "N/A"
         sclk = format_clock(gpu.sclk_mhz)
         mclk = format_clock(gpu.mclk_mhz)
-        row = [
+        row: list[RenderableType] = [
             str(gpu.index),
-            Text(gpu.guid or "N/A", style=DRACULA_FG if gpu.guid else DRACULA_DIM),
+            Text(safe_terminal_text(gpu.guid) or "N/A", style=DRACULA_FG if gpu.guid else DRACULA_DIM),
             Text(temp, style=temp_style(gpu.temperature_c)),
             Text(
                 format_fan(gpu.fan_percent, gpu.fan_rpm),
@@ -1034,7 +1069,7 @@ def pcie_throughput_summary(gpu: GpuInfo) -> str:
 
 
 def gpu_info_text(value: str, style: str = DRACULA_FG) -> Text:
-    text = value.strip()
+    text = safe_terminal_text(value).strip()
     if not text or text == "N/A":
         return Text("N/A", style=DRACULA_DIM)
     return Text(text, style=style)
@@ -1052,7 +1087,7 @@ def unique_non_empty(values) -> list[str]:
     unique: list[str] = []
     seen: set[str] = set()
     for value in values:
-        text = str(value or "").strip()
+        text = safe_terminal_text(value).strip()
         if not text:
             continue
         key = text.lower()
@@ -1136,7 +1171,7 @@ def render_gpu_metrics_graphs(
         table.add_row(Text("No GPU graph data", style=DRACULA_DIM), *[Text("") for _ in range(column_count - 1)])
         return table
 
-    row: list[object] = []
+    row: list[RenderableType] = []
     for gpu_index in gpu_indices:
         row.append(
             GpuMetricGraph(
@@ -1479,7 +1514,8 @@ def metric_graph_lines(
     rows_per_line = max(1, min(rows_per_line, len(BRAILLE_DOTS_BY_COLUMN[0])))
     graph_columns = width * GRAPH_COLUMNS_PER_CELL
     recent_values = list(values[-graph_columns:])
-    padded_values: list[float | None] = [None] * (graph_columns - len(recent_values)) + recent_values
+    padded_values: list[float | None] = [None] * (graph_columns - len(recent_values))
+    padded_values.extend(recent_values)
     lines: list[Text] = []
     for line_top_level in range(height, 0, -rows_per_line):
         line = Text(no_wrap=True, overflow="crop")
@@ -1677,17 +1713,21 @@ def render_process_table(
         proc = row.process
         gpu = "-" if proc.gpu_index is None else str(proc.gpu_index)
         command = row.command
-        command_cell = Text(command, no_wrap=True, overflow="crop") if process_state is not None else command
+        command_cell = (
+            Text(command, no_wrap=True, overflow="crop")
+            if process_state is not None
+            else Text(command)
+        )
         gpu_mem_style = percent_style(proc.gpu_memory_percent)
         table.add_row(
             gpu,
             str(proc.pid),
-            proc.user or "-",
+            Text(safe_terminal_text(proc.user) or "-"),
             Text(format_bytes_mib(proc.gpu_memory_bytes), style=gpu_mem_style),
             Text(percent_text(proc.gpu_memory_percent, digits=1), style=gpu_mem_style),
             metric_text(proc.cpu_percent, digits=1),
             metric_text(proc.host_mem_percent, digits=1),
-            process_elapsed_text(proc.elapsed, elapsed_offset_seconds),
+            Text(process_elapsed_text(proc.elapsed, elapsed_offset_seconds)),
             command_cell,
             style=process_row_style(proc, process_state, visible_index, selected_visible_index),
         )
@@ -1712,11 +1752,11 @@ def process_row_style(
 
 
 def render_process_title(process_state: ProcessViewState, process_count: int) -> Text:
-    title = Text(process_state.process_title(process_count), style=DRACULA_DIM)
+    title = Text(safe_terminal_text(process_state.process_title(process_count)), style=DRACULA_DIM)
     status_text = process_state.caption()
     if status_text:
         title.append("   ")
-        title.append(status_text, style=process_status_style(process_state))
+        title.append(safe_terminal_text(status_text), style=process_status_style(process_state))
     sort_menu = render_sort_menu(process_state)
     kill_menu = render_kill_confirm_menu(process_state)
     search_menu = render_search_menu(process_state)
@@ -1781,7 +1821,7 @@ def render_search_menu(process_state: ProcessViewState) -> Text | None:
         return None
     menu = Text(no_wrap=True, overflow="ellipsis")
     menu.append("Search: ", style=f"bold {DRACULA_CYAN}")
-    menu.append(process_state.search_input, style=DRACULA_FG)
+    menu.append(safe_terminal_text(process_state.search_input), style=DRACULA_FG)
     return menu
 
 
@@ -1790,7 +1830,7 @@ def render_filter_menu(process_state: ProcessViewState) -> Text | None:
         return None
     menu = Text(no_wrap=True, overflow="ellipsis")
     menu.append("Filter: ", style=f"bold {DRACULA_CYAN}")
-    menu.append(process_state.filter_input, style=DRACULA_FG)
+    menu.append(safe_terminal_text(process_state.filter_input), style=DRACULA_FG)
     return menu
 
 
@@ -1826,7 +1866,17 @@ def process_table_widths(
         for index, value in enumerate(process_metadata_values(proc, elapsed_offset_seconds)):
             widths[index] = max(widths[index], len(value))
     command_width = process_table_command_width(terminal_width, widths)
-    return ProcessTableWidths(*widths, command_width)
+    return ProcessTableWidths(
+        gpu=widths[0],
+        pid=widths[1],
+        user=widths[2],
+        gpu_memory=widths[3],
+        gpu_memory_percent=widths[4],
+        cpu=widths[5],
+        mem=widths[6],
+        time=widths[7],
+        command=command_width,
+    )
 
 
 def process_metadata_values(
@@ -1836,7 +1886,7 @@ def process_metadata_values(
     return (
         "-" if proc.gpu_index is None else str(proc.gpu_index),
         str(proc.pid),
-        proc.user or "-",
+        safe_terminal_text(proc.user) or "-",
         format_bytes_mib(proc.gpu_memory_bytes),
         percent_text(proc.gpu_memory_percent, digits=1),
         process_metric_value(proc.cpu_percent, digits=1),
@@ -1852,7 +1902,7 @@ def process_metric_value(value: float | int | None, digits: int = 1) -> str:
 
 
 def process_elapsed_text(value: str, offset_seconds: int = 0) -> str:
-    text = str(value or "").strip()
+    text = safe_terminal_text(value).strip()
     if not text or text == "-":
         return "-"
     seconds = parse_process_elapsed_seconds(text)
@@ -1976,7 +2026,10 @@ def visible_process_window(
 
 
 def process_command(proc: ProcessInfo) -> str:
-    return proc.args or proc.command or proc.name or "N/A"
+    return safe_terminal_text(
+        proc.args or proc.command or proc.name or "N/A",
+        allow_newlines=True,
+    )
 
 
 def wrapped_process_row(
@@ -2078,34 +2131,37 @@ def process_tree_prefixes(processes: list[ProcessInfo]) -> dict[tuple[int, int |
     prefixes: dict[tuple[int, int | None], str] = {}
     visited: set[tuple[int, int | None]] = set()
 
-    def assign(
-        key: tuple[int, int | None],
-        parent_last_flags: list[bool],
-        is_root: bool,
-        is_last: bool,
-    ) -> None:
-        if key in visited:
-            return
-        visited.add(key)
-        if is_root:
-            prefixes[key] = ""
-        else:
-            prefix_parts = ["   " if was_last else "│  " for was_last in parent_last_flags]
-            prefix_parts.append("└─ " if is_last else "├─ ")
-            prefixes[key] = "".join(prefix_parts)
-        children = children_by_parent.get(key, [])
-        for index, child_key in enumerate(children):
-            assign(
-                child_key,
-                parent_last_flags + ([is_last] if not is_root else []),
-                False,
-                index == len(children) - 1,
-            )
+    def assign_branch(root_key: tuple[int, int | None], root_is_last: bool) -> None:
+        pending: list[tuple[tuple[int, int | None], list[bool], bool, bool]] = [
+            (root_key, [], True, root_is_last),
+        ]
+        while pending:
+            key, parent_last_flags, is_root, is_last = pending.pop()
+            if key in visited:
+                continue
+            visited.add(key)
+            if is_root:
+                prefixes[key] = ""
+            else:
+                prefix_parts = ["   " if was_last else "│  " for was_last in parent_last_flags]
+                prefix_parts.append("└─ " if is_last else "├─ ")
+                prefixes[key] = "".join(prefix_parts)
+            children = children_by_parent.get(key, [])
+            child_parent_flags = parent_last_flags + ([is_last] if not is_root else [])
+            for index in range(len(children) - 1, -1, -1):
+                pending.append(
+                    (
+                        children[index],
+                        child_parent_flags,
+                        False,
+                        index == len(children) - 1,
+                    )
+                )
 
     for index, key in enumerate(root_keys):
-        assign(key, [], True, index == len(root_keys) - 1)
+        assign_branch(key, index == len(root_keys) - 1)
     for key in rows_by_key:
-        assign(key, [], True, True)
+        assign_branch(key, True)
     return prefixes
 
 
@@ -2120,7 +2176,7 @@ def render_warnings(warnings: list[str]) -> Panel:
     for index, warning in enumerate(warnings[:6]):
         if index:
             text.append("\n")
-        text.append(warning, style=DRACULA_YELLOW)
+        text.append(safe_terminal_text(warning, allow_newlines=True), style=DRACULA_YELLOW)
     if len(warnings) > 6:
         text.append(f"\n... {len(warnings) - 6} more warnings", style=DRACULA_YELLOW)
     return Panel(text, title="Warnings", border_style=DRACULA_YELLOW, box=box.SQUARE)

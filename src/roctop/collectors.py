@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import re
@@ -126,6 +127,7 @@ INSTINCT_SERIES_BY_PREFIX = {
     "350": "AMD Instinct MI350 Series",
     "355": "AMD Instinct MI350 Series",
 }
+NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 
 _amd_smi_process_backoff_until = 0.0
 _amd_smi_gpu_detail_backoff_until = 0.0
@@ -174,6 +176,8 @@ def run_command(args: list[str], timeout: float = 5.0) -> CommandResult:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except FileNotFoundError as exc:
@@ -352,7 +356,9 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
         match = re.search(r"\d+", key)
         if not match:
             continue
-        index = int(match.group(0))
+        index = parse_int(match.group(0), default=-1)
+        if index < 0:
+            continue
         name = first_non_empty(
             value.get("Card Series"),
             value.get("Card SKU"),
@@ -510,7 +516,7 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
         if not key.startswith("PID"):
             continue
         pid = parse_int(key.removeprefix("PID"), default=-1)
-        if pid < 0:
+        if pid <= 0:
             continue
         parts = [part.strip() for part in str(raw_value).split(",")]
         name = parts[0] if parts else ""
@@ -689,16 +695,16 @@ def amd_smi_driver_version(data: Any) -> str:
 def merge_amd_smi_gpu_details(gpus: list[GpuInfo], details: list[GpuInfo]) -> None:
     details_by_index: dict[int, GpuInfo] = {}
     for detail in details:
-        merged = details_by_index.get(detail.index)
-        if merged is None:
+        merged_detail = details_by_index.get(detail.index)
+        if merged_detail is None:
             details_by_index[detail.index] = detail
         else:
-            fill_missing_gpu_detail(merged, detail)
+            fill_missing_gpu_detail(merged_detail, detail)
 
     for gpu in gpus:
-        detail = details_by_index.get(gpu.index)
-        if detail is not None:
-            fill_missing_gpu_detail(gpu, detail)
+        matching_detail = details_by_index.get(gpu.index)
+        if matching_detail is not None:
+            fill_missing_gpu_detail(gpu, matching_detail)
 
 
 def fill_missing_gpu_detail(target: GpuInfo, source: GpuInfo) -> None:
@@ -924,17 +930,17 @@ def normalize_spacing(value: str) -> str:
 
 def iter_amd_smi_gpu_entries(data: Any, fallback_index: int | None = None):
     if isinstance(data, list):
-        for index, item in enumerate(data):
-            yield from iter_amd_smi_gpu_entries(item, index)
+        for list_index, item in enumerate(data):
+            yield from iter_amd_smi_gpu_entries(item, list_index)
         return
 
     if not isinstance(data, dict):
         return
 
-    index = amd_smi_gpu_index(data, fallback_index)
+    gpu_index = amd_smi_gpu_index(data, fallback_index)
     fields = flatten_amd_smi_fields(data)
-    if index is not None and amd_smi_fields_have_gpu_detail(fields):
-        yield index, data
+    if gpu_index is not None and amd_smi_fields_have_gpu_detail(fields):
+        yield gpu_index, data
         return
 
     for key, value in data.items():
@@ -945,21 +951,36 @@ def iter_amd_smi_gpu_entries(data: Any, fallback_index: int | None = None):
 
 
 def amd_smi_gpu_index(data: dict[str, Any], fallback_index: int | None = None) -> int | None:
+    found_index_field = False
     for key, value in data.items():
         if normalize_amd_smi_key(key) in ("gpu", "gpu_id", "gpu_index", "card", "card_id"):
+            found_index_field = True
             index = amd_smi_gpu_index_from_text(value)
             if index is not None:
                 return index
-    return fallback_index
+    return None if found_index_field else fallback_index
 
 
 def amd_smi_gpu_index_from_text(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None or isinstance(value, (dict, list)):
+        return None
     if isinstance(value, int):
-        return value
+        return value if value >= 0 else None
     if isinstance(value, float):
+        if not math.isfinite(value) or value < 0 or not value.is_integer():
+            return None
         return int(value)
-    match = re.search(r"\d+", str(value or ""))
-    return int(match.group(0)) if match else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.fullmatch(NUMBER_PATTERN, text):
+        number = parse_number(text, default=math.nan)
+        if not math.isfinite(number) or number < 0 or not number.is_integer():
+            return None
+        return int(number)
+    match = re.search(r"\d+", text)
+    index = parse_int(match.group(0), default=-1) if match else -1
+    return index if index >= 0 else None
 
 
 def amd_smi_fields_have_gpu_detail(fields: list[tuple[str, Any]]) -> bool:
@@ -1081,7 +1102,7 @@ def parse_amd_smi_process_json(data: list[dict[str, Any]], gpus: list[GpuInfo]) 
             if not isinstance(info, dict):
                 continue
             pid = parse_int(info.get("pid"), default=-1)
-            if pid < 0:
+            if pid <= 0:
                 continue
             gpu_memory = parse_memory_bytes_field(info.get("mem_usage"))
             if gpu_memory <= 0:
@@ -1121,14 +1142,19 @@ def merge_process_sources(primary: list[ProcessInfo], fallback: list[ProcessInfo
     if not fallback:
         return primary
 
+    fallback_by_key: dict[tuple[int, int | None], ProcessInfo] = {}
     fallback_by_pid: dict[int, ProcessInfo] = {}
     for proc in fallback:
+        key = (proc.pid, proc.gpu_index)
+        existing_for_key = fallback_by_key.get(key)
+        if existing_for_key is None or proc.gpu_memory_bytes > existing_for_key.gpu_memory_bytes:
+            fallback_by_key[key] = proc
         existing = fallback_by_pid.get(proc.pid)
         if existing is None or proc.gpu_memory_bytes > existing.gpu_memory_bytes:
             fallback_by_pid[proc.pid] = proc
 
     for proc in primary:
-        fallback_proc = fallback_by_pid.get(proc.pid)
+        fallback_proc = fallback_by_key.get((proc.pid, proc.gpu_index)) or fallback_by_pid.get(proc.pid)
         if not fallback_proc:
             continue
         if not proc.name:
@@ -1137,8 +1163,13 @@ def merge_process_sources(primary: list[ProcessInfo], fallback: list[ProcessInfo
             proc.command = fallback_proc.command
         if proc.gpu_memory_bytes <= 0:
             proc.gpu_memory_bytes = fallback_proc.gpu_memory_bytes
-    primary_pids = {proc.pid for proc in primary}
-    primary.extend(proc for pid, proc in fallback_by_pid.items() if pid not in primary_pids)
+    primary_keys = {(proc.pid, proc.gpu_index) for proc in primary}
+    primary_pids = {pid for pid, _gpu_index in primary_keys}
+    primary.extend(
+        proc
+        for key, proc in fallback_by_key.items()
+        if key not in primary_keys and (proc.gpu_index is not None or proc.pid not in primary_pids)
+    )
     return primary
 
 
@@ -1734,7 +1765,8 @@ def parse_memory_bytes_field(value: Any) -> int:
     amount = value.get("value")
     if isinstance(amount, str):
         amount = amount.replace(",", "")
-    return int(parse_number(amount, 0.0) * memory_unit_multiplier(value.get("unit")))
+    byte_count = parse_number(amount, 0.0) * memory_unit_multiplier(value.get("unit"))
+    return int(byte_count) if math.isfinite(byte_count) else 0
 
 
 def memory_unit_multiplier(unit: Any) -> int:
@@ -1856,7 +1888,11 @@ def normalize_instinct_model(value: str) -> str:
     if len(known_tokens) == 1:
         return INSTINCT_MODEL_BY_TOKEN[known_tokens[0]]
 
-    prefixes = {re.match(r"mi([0-9]+)", token).group(1) for token in known_tokens}
+    prefixes = {
+        match.group(1)
+        for token in known_tokens
+        if (match := re.match(r"mi([0-9]+)", token)) is not None
+    }
     series_names = {INSTINCT_SERIES_BY_PREFIX[prefix] for prefix in prefixes if prefix in INSTINCT_SERIES_BY_PREFIX}
     if len(series_names) == 1:
         return series_names.pop()
@@ -1883,22 +1919,16 @@ def parse_optional_float(value: Any) -> float | None:
     text = str(value).strip()
     if not text or text.upper() == "N/A" or "not supported" in text.lower():
         return None
-    match = re.search(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
+    match = re.search(NUMBER_PATTERN, text.replace(",", ""))
     if not match:
         return None
-    return float(match.group(0))
+    number = float(match.group(0))
+    return number if math.isfinite(number) else None
 
 
 def parse_clock_mhz(value: Any) -> int | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.upper() == "N/A":
-        return None
-    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
-    if not match:
-        return None
-    return int(round(float(match.group(0))))
+    parsed = parse_optional_float(value)
+    return int(round(parsed)) if parsed is not None else None
 
 
 def parse_fan_percent(data: dict[str, Any]) -> float | None:
@@ -1936,24 +1966,19 @@ def parse_percent_from_text(value: Any) -> float | None:
     text = str(value).strip()
     if not text or text.upper() == "N/A" or "not supported" in text.lower():
         return None
-    match = re.search(r"[-+]?\d+(?:\.\d+)?(?=\s*%)", text)
+    match = re.search(rf"{NUMBER_PATTERN}(?=\s*%)", text)
     if match:
-        return clamp_percent(float(match.group(0)))
-    if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", text):
-        return clamp_percent(float(text))
+        parsed = parse_optional_float(match.group(0))
+        return clamp_percent(parsed) if parsed is not None else None
+    if re.fullmatch(NUMBER_PATTERN, text):
+        parsed = parse_optional_float(text)
+        return clamp_percent(parsed) if parsed is not None else None
     return None
 
 
 def parse_int_from_text(value: Any) -> int | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text.upper() == "N/A" or "not supported" in text.lower():
-        return None
-    match = re.search(r"[-+]?\d+(?:\.\d+)?", text.replace(",", ""))
-    if not match:
-        return None
-    return int(round(float(match.group(0))))
+    parsed = parse_optional_float(value)
+    return int(round(parsed)) if parsed is not None else None
 
 
 def _warnings_from_result(result: CommandResult) -> list[str]:

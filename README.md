@@ -75,7 +75,7 @@ python -m roctop --once
 Options:
 
 ```text
---interval SECONDS   refresh interval for the live view, default: 1.0
+--interval SECONDS   refresh interval for the live view, minimum: 0.05, default: 1.0
 --once               render one terminal snapshot and exit
 --json               print one normalized JSON snapshot and exit
 --version            print the package version

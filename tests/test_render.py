@@ -9,6 +9,7 @@ from rich.console import Console, Group
 from rich.text import Text
 
 import roctop.render as render
+from roctop import __version__
 from roctop.cli import handle_key_batch
 from roctop.history import GpuMetricSample, MetricSample, MetricsHistory
 from roctop.interaction import (
@@ -167,6 +168,35 @@ class RenderTests(unittest.TestCase):
         output = console.export_text()
         self.assertNotIn("Warnings", output)
         self.assertNotIn("driver warning", output)
+
+    def test_header_and_warnings_sanitize_external_text(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            node_name="[/red]node\x1b]52;c;payload\x07",
+            driver_version="[bold]6.14[/bold]\x1b[2J",
+            gpus=[
+                GpuInfo(
+                    index=0,
+                    gpu_type="[italic]AMD GPU[/italic]\x00",
+                    gfx_version="gfx950\x9b2J",
+                )
+            ],
+        )
+        output = StringIO()
+        console = Console(width=180, file=output, color_system=None)
+
+        console.print(render.render_header(snapshot))
+        console.print(render.render_warnings(["[/red]warning\x1b]0;title\x07"]))
+        plain = output.getvalue()
+
+        self.assertIn("[/red]node", plain)
+        self.assertIn("[bold]6.14[/bold]", plain)
+        self.assertIn("[italic]AMD GPU[/italic]", plain)
+        self.assertIn("[/red]warning", plain)
+        self.assertNotIn("\x1b", plain)
+        self.assertNotIn("\x07", plain)
+        self.assertNotIn("\x00", plain)
+        self.assertNotIn("\x9b", plain)
 
     def test_snapshot_renders_history_graphs_between_tables(self) -> None:
         snapshot = Snapshot(
@@ -919,6 +949,32 @@ class RenderTests(unittest.TestCase):
         self.assertIn("--model-path", output)
         self.assertIn("--final-flag", output)
 
+    def test_process_table_renders_markup_and_terminal_controls_as_safe_text(self) -> None:
+        process = ProcessInfo(
+            gpu_index=0,
+            pid=123,
+            user="[/red]demo\x1b]52;c;payload\x07",
+            elapsed="[/red]\rspoofed",
+            args="python [bold]worker[/bold] \x1b[2Jdone",
+        )
+
+        for state in (None, ProcessViewState(viewport_rows=4)):
+            output = StringIO()
+            Console(width=180, file=output, color_system=None).print(
+                render_process_table(
+                    [process],
+                    process_state=state,
+                    terminal_width=180,
+                )
+            )
+            plain = output.getvalue()
+
+            self.assertIn("[/red]demo", plain)
+            self.assertIn("[bold]worker[/bold]", plain)
+            self.assertNotIn("\x1b", plain)
+            self.assertNotIn("\x07", plain)
+            self.assertNotIn("\r", plain)
+
     def test_process_view_state_renders_title_and_selected_row(self) -> None:
         state = ProcessViewState(selected_pid=123, viewport_rows=4)
         console = Console(width=120, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
@@ -1183,7 +1239,14 @@ class RenderTests(unittest.TestCase):
         )
         normal_state = ProcessViewState(selected_pid=123, viewport_rows=4)
         state = ProcessViewState(selected_pid=123, mode=MODE_HELP, viewport_rows=4)
-        console = Console(width=140, force_terminal=True, color_system="truecolor", record=True, file=StringIO())
+        console = Console(
+            width=140,
+            height=45,
+            force_terminal=True,
+            color_system="truecolor",
+            record=True,
+            file=StringIO(),
+        )
         console.print(render_snapshot(snapshot, process_state=state, terminal_height=45, terminal_width=140))
         plain = console.export_text(clear=False)
         styled = console.export_text(styles=True)
@@ -1192,7 +1255,7 @@ class RenderTests(unittest.TestCase):
             estimate_process_view_rows(snapshot, None, 45, normal_state),
             estimate_process_view_rows(snapshot, None, 45, state),
         )
-        self.assertIn("roctop 0.4.4 - AMD GPU/process monitor for ROCm", plain)
+        self.assertIn(f"roctop {__version__} - AMD GPU/process monitor for ROCm", plain)
         self.assertIn("Colors:", plain)
         self.assertIn("green  : good headroom, low pressure", plain)
         self.assertIn("yellow : high usage, worth watching", plain)
@@ -1217,10 +1280,48 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Press Esc or ? to return.", plain)
         esc_lines = [line for line in plain.splitlines() if "Esc: close graphs/menus" in line]
         self.assertEqual(len(esc_lines), 1)
-        self.assertNotIn("inspect selected process", esc_lines[0])
         self.assertIn("38;2;80;250;123", styled)
         self.assertIn("38;2;241;250;140", styled)
         self.assertIn("38;2;255;85;85", styled)
+
+    def test_help_popup_scrolls_wrapped_rows_within_terminal_height(self) -> None:
+        state = ProcessViewState(mode=MODE_HELP)
+        gpus = [GpuInfo(index=index) for index in range(8)]
+
+        top_output = StringIO()
+        Console(width=120, file=top_output, color_system=None).print(
+            render.render_help_popup(
+                state,
+                terminal_width=120,
+                gpus=gpus,
+                terminal_height=24,
+            )
+        )
+
+        self.assertGreater(state.help_render_row_count, state.help_visible_rows)
+        self.assertEqual(state.help_visible_rows, 22)
+        self.assertEqual(len(top_output.getvalue().splitlines()), 24)
+        self.assertIn(f"roctop {__version__}", top_output.getvalue())
+        self.assertNotIn("Press Esc or ? to return.", top_output.getvalue())
+
+        state.help_scroll_offset = state.help_render_row_count
+        bottom_output = StringIO()
+        Console(width=120, file=bottom_output, color_system=None).print(
+            render.render_help_popup(
+                state,
+                terminal_width=120,
+                gpus=gpus,
+                terminal_height=24,
+            )
+        )
+
+        self.assertEqual(
+            state.help_scroll_offset,
+            state.help_render_row_count - state.help_visible_rows,
+        )
+        self.assertEqual(len(bottom_output.getvalue().splitlines()), 24)
+        self.assertNotEqual(top_output.getvalue(), bottom_output.getvalue())
+        self.assertIn("Press Esc or ? to return.", bottom_output.getvalue())
 
     def test_help_key_lines_wrap_long_actions(self) -> None:
         lines = render.help_key_lines(
@@ -1245,7 +1346,7 @@ class RenderTests(unittest.TestCase):
         console.print(render.HelpOverlay(base, state, terminal_height=25, terminal_width=120))
         lines = console.export_text(clear=False).splitlines()
 
-        help_row = next(line for line in lines if "roctop 0.4.4" in line)
+        help_row = next(line for line in lines if f"roctop {__version__}" in line)
         self.assertTrue(help_row.startswith("L"))
         self.assertTrue(help_row.rstrip().endswith("R"))
         self.assertIn("AMD GPU/process monitor", help_row)
@@ -1333,6 +1434,36 @@ class RenderTests(unittest.TestCase):
         self.assertIn("j/k or Up/Down: scroll", plain)
         self.assertIn("h/l or Left/Right: page", plain)
         self.assertIn("i/Esc: close", plain)
+
+    def test_process_info_popup_sanitizes_external_text(self) -> None:
+        process = ProcessInfo(
+            gpu_index=0,
+            pid=42,
+            user="[/red]\x1b]52;c;payload\x07",
+            args="python [bold]worker[/bold]",
+        )
+        detail = ProcessDetailInfo(
+            pid=42,
+            cmdline="[/red]\x1b[2J",
+        )
+        state = ProcessViewState(mode=MODE_PROCESS_INFO)
+        state.open_process_info(process, detail)
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            gpus=[GpuInfo(index=0)],
+            processes=[process],
+        )
+
+        output = StringIO()
+        Console(width=140, file=output, color_system=None).print(
+            render.render_process_info_popup(snapshot, state, terminal_width=140)
+        )
+        plain = output.getvalue()
+
+        self.assertIn("[/red]", plain)
+        self.assertIn("[bold]worker[/bold]", plain)
+        self.assertNotIn("\x1b", plain)
+        self.assertNotIn("\x07", plain)
 
     def test_process_info_popup_renders_container_details(self) -> None:
         container_id = "a" * 64
@@ -1733,6 +1864,30 @@ class RenderTests(unittest.TestCase):
         selected_lines = [line for line in styled.splitlines() if "48;2;68;71;90" in line]
         self.assertEqual(len(selected_lines), 1)
         self.assertIn("└─ python serve", selected_lines[0])
+
+    def test_tree_render_handles_process_chains_deeper_than_python_recursion_limit(self) -> None:
+        processes = [
+            ProcessInfo(
+                gpu_index=0,
+                pid=pid,
+                ppid=pid - 1 if pid > 1 else None,
+                args=f"process-{pid}",
+            )
+            for pid in range(1, 1501)
+        ]
+        state = ProcessViewState(tree_mode=True, viewport_rows=4)
+        console = Console(width=120, file=StringIO(), record=True)
+
+        console.print(
+            render_process_table(
+                processes,
+                process_state=state,
+                max_rows=4,
+                terminal_width=120,
+            )
+        )
+
+        self.assertIn("process-1", console.export_text())
 
     def test_tree_gpu_focus_renders_parent_processes(self) -> None:
         processes = [

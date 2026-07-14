@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import os
 import select
 import signal
@@ -8,7 +9,7 @@ import termios
 import time
 import tty
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 from .models import ProcessDetailInfo, ProcessInfo
 
@@ -29,6 +30,10 @@ ESCAPE_KEY_SEQUENCES = (
     ("\x1b[B", KEY_DOWN),
     ("\x1b[C", KEY_RIGHT),
     ("\x1b[D", KEY_LEFT),
+    ("\x1bOA", KEY_UP),
+    ("\x1bOB", KEY_DOWN),
+    ("\x1bOC", KEY_RIGHT),
+    ("\x1bOD", KEY_LEFT),
     ("\x1b[5~", KEY_PAGE_UP),
     ("\x1b[6~", KEY_PAGE_DOWN),
 )
@@ -150,6 +155,8 @@ class ProcessViewState:
     viewport_rows: int = 8
     tree_mode: bool = False
     help_scroll_offset: int = 0
+    help_render_row_count: int = 0
+    help_visible_rows: int = HELP_VISIBLE_ROWS
     process_info_scroll_offset: int = 0
     process_info_process: ProcessInfo | None = None
     process_info_detail: ProcessDetailInfo | None = None
@@ -263,7 +270,7 @@ class ProcessViewState:
         self,
         key: str,
         processes: list[ProcessInfo],
-        kill_func: Callable[[int, signal.Signals], None] = None,
+        kill_func: Callable[[int, signal.Signals], None] | None = None,
         processes_synced: bool = False,
         gpu_indices: Iterable[int] | None = None,
         all_processes: Iterable[ProcessInfo] | None = None,
@@ -350,6 +357,8 @@ class ProcessViewState:
         if key == "?":
             self.mode = MODE_HELP
             self.help_scroll_offset = 0
+            self.help_render_row_count = 0
+            self.help_visible_rows = HELP_VISIBLE_ROWS
             self.clear_status_message()
             return KeyResult(changed=True)
         if key in ("h", KEY_LEFT) and self.tree_mode:
@@ -553,13 +562,16 @@ class ProcessViewState:
             self.help_scroll_offset = max(0, self.help_scroll_offset - 1)
             return KeyResult(changed=True)
         if key in ("j", KEY_DOWN):
-            self.help_scroll_offset = min(max_help_scroll_offset(), self.help_scroll_offset + 1)
+            self.help_scroll_offset = min(max_help_scroll_offset(self), self.help_scroll_offset + 1)
             return KeyResult(changed=True)
         if key in ("h", KEY_LEFT):
-            self.help_scroll_offset = max(0, self.help_scroll_offset - HELP_VISIBLE_ROWS)
+            self.help_scroll_offset = max(0, self.help_scroll_offset - max(1, self.help_visible_rows))
             return KeyResult(changed=True)
         if key in ("l", KEY_RIGHT):
-            self.help_scroll_offset = min(max_help_scroll_offset(), self.help_scroll_offset + HELP_VISIBLE_ROWS)
+            self.help_scroll_offset = min(
+                max_help_scroll_offset(self),
+                self.help_scroll_offset + max(1, self.help_visible_rows),
+            )
             return KeyResult(changed=True)
         return KeyResult()
 
@@ -809,11 +821,14 @@ class TerminalKeyboard:
     def __init__(self, stream=None) -> None:
         self.stream = stream or sys.stdin
         self.fd: int | None = None
-        self.original_attrs = None
+        self.original_attrs: list[Any] | None = None
         self.enabled = False
         self.pending_input = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="ignore")
 
     def __enter__(self) -> TerminalKeyboard:
+        self.pending_input = ""
+        self._decoder.reset()
         if hasattr(self.stream, "isatty") and self.stream.isatty():
             self.fd = self.stream.fileno()
             self.original_attrs = termios.tcgetattr(self.fd)
@@ -822,13 +837,16 @@ class TerminalKeyboard:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        if self.enabled and self.fd is not None and self.original_attrs is not None:
+        if self.fd is not None and self.original_attrs is not None:
             try:
                 termios.tcsetattr(self.fd, termios.TCSANOW, self.original_attrs)
             except (OSError, termios.error):
                 pass
         self.enabled = False
         self.fd = None
+        self.original_attrs = None
+        self.pending_input = ""
+        self._decoder.reset()
 
     def read_keys(self, timeout: float = 0.0) -> list[str]:
         if not self.enabled or self.fd is None:
@@ -851,8 +869,9 @@ class TerminalKeyboard:
         if not data:
             self.enabled = False
             self.pending_input = ""
+            self._decoder.reset()
             return []
-        keys, self.pending_input = parse_key_input(self.pending_input + data.decode(errors="ignore"))
+        keys, self.pending_input = parse_key_input(self.pending_input + self._decoder.decode(data))
         return keys
 
 
@@ -896,9 +915,28 @@ def parse_key_input(data: bytes | str, flush_incomplete: bool = False) -> tuple[
             continue
         if not flush_incomplete and any(raw.startswith(sequence) for raw, _key in ESCAPE_KEY_SEQUENCES):
             return keys, sequence
+        ansi_length = unsupported_ansi_sequence_length(sequence)
+        if ansi_length is not None:
+            index += ansi_length
+            continue
+        if not flush_incomplete and sequence.startswith(("\x1b[", "\x1bO")):
+            return keys, sequence
+        if flush_incomplete and sequence.startswith(("\x1b[", "\x1bO")):
+            return keys, ""
         keys.append(KEY_ESC)
         index += 1
     return keys, ""
+
+
+def unsupported_ansi_sequence_length(sequence: str) -> int | None:
+    if sequence.startswith("\x1b["):
+        for index, char in enumerate(sequence[2:], start=2):
+            if "@" <= char <= "~":
+                return index + 1
+        return None
+    if sequence.startswith("\x1bO") and len(sequence) >= 3:
+        return 3
+    return None
 
 
 def is_printable_key(key: str) -> bool:
@@ -1058,12 +1096,20 @@ def flatten_process_tree(
     visited: set[ProcessSelectionKey] = set()
 
     def append_branch(key: ProcessSelectionKey) -> None:
-        if key in visited:
-            return
-        visited.add(key)
-        flattened.append(rows_by_key[key])
-        for child_key in sorted_tree_keys(children_by_parent.get(key, []), rows_by_key, sort_field, sort_desc):
-            append_branch(child_key)
+        pending = [key]
+        while pending:
+            current_key = pending.pop()
+            if current_key in visited:
+                continue
+            visited.add(current_key)
+            flattened.append(rows_by_key[current_key])
+            child_keys = sorted_tree_keys(
+                children_by_parent.get(current_key, []),
+                rows_by_key,
+                sort_field,
+                sort_desc,
+            )
+            pending.extend(reversed(child_keys))
 
     for key in sorted_tree_keys(root_keys, rows_by_key, sort_field, sort_desc):
         append_branch(key)
@@ -1191,8 +1237,11 @@ def current_sort_menu_index(sort_field: str) -> int:
         return 0
 
 
-def max_help_scroll_offset() -> int:
-    return max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
+def max_help_scroll_offset(process_state: ProcessViewState | None = None) -> int:
+    if process_state is None:
+        return max(0, len(HELP_ENTRIES) - HELP_VISIBLE_ROWS)
+    row_count = process_state.help_render_row_count or len(HELP_ENTRIES)
+    return max(0, row_count - max(1, process_state.help_visible_rows))
 
 
 def max_process_info_scroll_offset(process_state: ProcessViewState) -> int:

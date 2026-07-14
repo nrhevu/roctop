@@ -39,9 +39,7 @@ def main() -> int:
         sys.path.insert(0, str(src_path))
 
     from rich.console import Console
-    from roctop.history import MetricSample, MetricsHistory
     from roctop.interaction import ProcessViewState
-    from roctop.models import GpuInfo, ProcessInfo, Snapshot
     from roctop.render import render_snapshot
 
     output = Path(args.output)
@@ -76,7 +74,7 @@ def main() -> int:
 
 
 def build_snapshot() -> object:
-    from roctop.models import GpuInfo, ProcessInfo, Snapshot
+    from roctop.models import GpuInfo, Snapshot
 
     gib = 1024**3
     memory_total = int(288 * gib)

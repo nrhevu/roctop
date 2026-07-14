@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import os
+import pty
+import select
 import signal
+import subprocess
+import sys
+import termios
 import threading
 import time
 import unittest
@@ -59,6 +65,27 @@ class CliTests(unittest.TestCase):
         finally:
             cli.run_live = original_run_live
 
+    def test_main_prints_collection_errors_with_hostile_rich_markup_literally(self) -> None:
+        output = StringIO()
+        message = (
+            "command failed: [/red][link=https://example.invalid]details[/link] "
+            "\x1b]8;;https://evil.invalid\x07click\x1b]8;;\x07\x9b31m"
+        )
+
+        with (
+            patch("sys.stderr", output),
+            patch("roctop.cli.run_live", side_effect=CollectionError(message)),
+        ):
+            self.assertEqual(cli.main([]), 1)
+
+        rendered = output.getvalue()
+        self.assertIn("[/red][link=https://example.invalid]details[/link]", rendered)
+        self.assertIn("click", rendered)
+        self.assertIn("\\x1b", rendered)
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("\x07", rendered)
+        self.assertNotIn("\x9b", rendered)
+
     def test_main_version_prints_package_version(self) -> None:
         output = StringIO()
 
@@ -70,6 +97,101 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(context.exception.code, 0)
         self.assertIn(f"roctop {cli.__version__}", output.getvalue())
+
+    def test_main_rejects_unsafe_intervals(self) -> None:
+        for interval in ("nan", "inf", "-inf", "1e-300", "0.049999", "1e300"):
+            with (
+                self.subTest(interval=interval),
+                patch("sys.stderr", StringIO()),
+                patch("roctop.cli.collect_snapshot") as collect_snapshot,
+            ):
+                self.assertEqual(cli.main(["--once", f"--interval={interval}"]), 2)
+                collect_snapshot.assert_not_called()
+
+    def test_main_accepts_intervals_at_platform_boundaries(self) -> None:
+        for interval in (cli.KEY_POLL_SECONDS, cli.MAX_INTERVAL_SECONDS):
+            with (
+                self.subTest(interval=interval),
+                patch("roctop.cli.run_live", return_value=0) as run_live,
+            ):
+                self.assertEqual(cli.main([f"--interval={interval!r}"]), 0)
+                self.assertEqual(run_live.call_args.args[1], interval)
+
+    def test_interval_help_shows_safe_platform_range(self) -> None:
+        help_text = " ".join(cli.build_parser().format_help().split())
+
+        self.assertIn(
+            f"Range: {cli.KEY_POLL_SECONDS:g}-{cli.MAX_INTERVAL_SECONDS:.0f}",
+            help_text,
+        )
+
+    def test_live_termination_signal_handlers_request_conventional_exit_and_restore_defaults(self) -> None:
+        installed_handlers: dict[signal.Signals, object] = {}
+        restored_handlers: dict[signal.Signals, object] = {}
+
+        def record_signal(signum: signal.Signals, handler: object) -> None:
+            if signum in installed_handlers:
+                restored_handlers[signum] = handler
+            else:
+                installed_handlers[signum] = handler
+
+        with (
+            patch("roctop.cli.signal.getsignal", return_value=signal.SIG_DFL),
+            patch("roctop.cli.signal.signal", side_effect=record_signal),
+        ):
+            with cli.live_termination_signal_handlers():
+                for signum in cli.LIVE_TERMINATION_SIGNALS:
+                    handler = installed_handlers[signum]
+                    self.assertTrue(callable(handler))
+                    with self.assertRaises(SystemExit) as context:
+                        handler(signum, None)
+                    self.assertEqual(context.exception.code, 128 + signum)
+
+        self.assertEqual(restored_handlers, {signum: signal.SIG_DFL for signum in cli.LIVE_TERMINATION_SIGNALS})
+
+    def test_termination_signals_restore_real_pty_terminal_mode(self) -> None:
+        child_code = """
+from roctop import cli
+from roctop.interaction import TerminalKeyboard
+import time
+
+with cli.live_termination_signal_handlers(), TerminalKeyboard():
+    print("ready", flush=True)
+    time.sleep(30)
+"""
+        for signum in cli.LIVE_TERMINATION_SIGNALS:
+            with self.subTest(signum=signum):
+                master_fd, slave_fd = pty.openpty()
+                original_attrs = termios.tcgetattr(slave_fd)
+                child = None
+                try:
+                    child = subprocess.Popen(
+                        [sys.executable, "-c", child_code],
+                        stdin=slave_fd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    self.assertIsNotNone(child.stdout)
+                    readable, _, _ = select.select([child.stdout], [], [], 3.0)
+                    self.assertTrue(readable)
+                    self.assertEqual(child.stdout.readline().strip(), "ready")
+                    self.assertNotEqual(termios.tcgetattr(slave_fd), original_attrs)
+
+                    child.send_signal(signum)
+
+                    self.assertEqual(child.wait(timeout=3.0), 128 + signum)
+                    self.assertEqual(termios.tcgetattr(slave_fd), original_attrs)
+                finally:
+                    if child is not None and child.poll() is None:
+                        child.kill()
+                        child.wait(timeout=3.0)
+                    if child is not None and child.stdout is not None:
+                        child.stdout.close()
+                    if child is not None and child.stderr is not None:
+                        child.stderr.close()
+                    os.close(master_fd)
+                    os.close(slave_fd)
 
     def test_collect_snapshot_retry_swallows_timeout(self) -> None:
         calls = 0
@@ -1088,6 +1210,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(calls, [(1, signal.SIGTERM), (2, signal.SIGTERM)])
         self.assertEqual([row.pid for row in processes], [2])
         self.assertEqual(state.selected_pids, set())
+
+    def test_handle_key_batch_stops_after_quit_before_later_destructive_keys(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[ProcessInfo(gpu_index=0, pid=42)],
+        )
+        state = cli.ProcessViewState(selected_pid=42)
+
+        with patch("roctop.interaction.kill_process") as kill_process:
+            quit_requested, _processes = cli.handle_key_batch(snapshot, state, ["q", "x", "y"])
+
+        self.assertTrue(quit_requested)
+        kill_process.assert_not_called()
+        self.assertEqual(state.mode, MODE_NORMAL)
+
+    def test_handle_key_batch_can_kill_selected_tree_ancestor(self) -> None:
+        snapshot = Snapshot(
+            timestamp=datetime(2026, 6, 22, 12, 0, 0),
+            processes=[ProcessInfo(gpu_index=0, pid=42, ppid=7)],
+            process_ancestors=[ProcessInfo(gpu_index=None, pid=7)],
+        )
+        state = cli.ProcessViewState(selected_pid=7, tree_mode=True)
+
+        with patch("roctop.interaction.kill_process") as kill_process:
+            quit_requested, _processes = cli.handle_key_batch(snapshot, state, ["x", "y"])
+
+        self.assertFalse(quit_requested)
+        kill_process.assert_called_once_with(7, signal.SIGTERM)
+        self.assertEqual(state.status_message, "Sent SIGTERM to PID 7")
 
     def test_handle_key_batch_escape_clears_active_filter(self) -> None:
         state = cli.ProcessViewState(filter_query="train", filter_input="train", gpu_filter_index=0)
