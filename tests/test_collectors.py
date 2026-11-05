@@ -195,6 +195,41 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(len(amd_calls), 1)
         self.assertEqual(amd_calls[0][1], collectors.AMD_SMI_PROCESS_TIMEOUT_SECONDS)
 
+    def test_rocm_smi_gpu_count_does_not_duplicate_amd_smi_process_on_other_gpu(self) -> None:
+        def fake_run_command(args, timeout=None) -> CommandResult:
+            if args[0] == "rocm-smi":
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '{"card0": {"VRAM Total Memory (B)": "4194304"}, '
+                        '"card1": {"VRAM Total Memory (B)": "1048576"}, '
+                        '"system": {"PID42": "demo-worker, 1, 2097152, 0, unknown"}}'
+                    ),
+                    stderr="",
+                )
+            if args == collectors.AMD_SMI_PROCESS_ARGS:
+                return CommandResult(
+                    args=args,
+                    returncode=0,
+                    stdout=(
+                        '[{"gpu": 0, "process_list": [{"process_info": '
+                        '{"name": "N/A", "pid": 42, "mem_usage": 2097152}}]}, '
+                        '{"gpu": 1, "process_list": []}]'
+                    ),
+                    stderr="",
+                )
+            if args[0] == "amd-smi":
+                return CommandResult(args=args, returncode=0, stdout="[]", stderr="")
+            return CommandResult(args=args, returncode=1, stdout="", stderr="")
+
+        with patch("roctop.collectors.run_command", side_effect=fake_run_command):
+            snapshot = collect_snapshot()
+
+        self.assertEqual([(proc.pid, proc.gpu_index) for proc in snapshot.processes], [(42, 0)])
+        self.assertEqual(snapshot.processes[0].command, "demo-worker")
+        self.assertEqual(snapshot.processes[0].gpu_memory_percent, 50.0)
+
     def test_amd_smi_process_backoff_skips_optional_command_during_cooldown(self) -> None:
         amd_calls = 0
 
@@ -723,7 +758,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].memory_used_bytes, 200804560896)
         self.assertEqual(len(processes), 2)
         self.assertEqual(processes[0].pid, 710898)
-        self.assertEqual(processes[0].gpu_index, 1)
+        self.assertEqual(processes[0].gpu_index, 0)
         self.assertEqual(processes[1].pid, 721888)
         self.assertEqual(processes[1].gpu_index, 0)
         self.assertEqual(processes[1].gpu_memory_bytes, 0)
@@ -854,6 +889,18 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(gpus[0].index, 0)
         self.assertEqual(processes[0].gpu_index, 0)
         self.assertEqual(processes[0].gpu_memory_percent, 25.0)
+
+    def test_parse_rocm_smi_json_leaves_process_gpu_unknown_on_multi_gpu_hosts(self) -> None:
+        _gpus, processes, _driver = parse_rocm_smi_json(
+            {
+                "card0": {"VRAM Total Memory (B)": str(4 * 1024 * 1024)},
+                "card1": {"VRAM Total Memory (B)": str(1024 * 1024)},
+                "system": {"PID42": "demo-worker, 1, 2097152, 0, unknown"},
+            }
+        )
+
+        self.assertEqual(processes[0].gpu_index, None)
+        self.assertEqual(processes[0].gpu_memory_bytes, 2097152)
 
     def test_parse_rocm_smi_json_reads_metric_detail_aliases(self) -> None:
         gpus, _processes, _driver = parse_rocm_smi_json(

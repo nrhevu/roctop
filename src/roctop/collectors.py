@@ -506,6 +506,9 @@ def parse_rocm_smi_json(data: dict[str, Any]) -> tuple[list[GpuInfo], list[Proce
             )
         )
 
+    if len(gpus) == 1:
+        for proc in processes:
+            proc.gpu_index = gpus[0].index
     apply_gpu_memory_percent(processes, gpus)
     return gpus, processes, driver_version
 
@@ -520,11 +523,11 @@ def parse_rocm_system_processes(system: dict[str, Any]) -> list[ProcessInfo]:
             continue
         parts = [part.strip() for part in str(raw_value).split(",")]
         name = parts[0] if parts else ""
-        gpu_index = parse_int(parts[1] if len(parts) > 1 else None, default=-1)
+        # parts[1] is the number of GPUs the process uses, not a GPU index.
         gpu_memory = parse_int(parts[2] if len(parts) > 2 else 0)
         processes.append(
             ProcessInfo(
-                gpu_index=gpu_index if gpu_index >= 0 else None,
+                gpu_index=None,
                 pid=pid,
                 name=name,
                 command=name,
